@@ -9,12 +9,122 @@ fn upnpCallback(
     event: ?*const anyopaque,
     cookie: ?*anyopaque,
 ) callconv(.c) c_int {
-    _ = event;
     _ = cookie;
 
     std.log.info("Event type: {}", .{event_type});
 
+    switch (event_type) {
+        c.UPNP_CONTROL_ACTION_REQUEST => {
+            const request: *const c.UpnpActionRequest = @ptrCast(event);
+            const serviceId = std.mem.span(c.UpnpActionRequest_get_ServiceID_cstr(request));
+            const action = std.mem.span(c.UpnpActionRequest_get_ActionName_cstr(request));
+
+            std.log.info("action request {s} {s}", .{ serviceId, action });
+
+            if (std.mem.eql(u8, serviceId, "urn:upnp-org:serviceId:ContentDirectory")) {
+                if (std.mem.eql(u8, action, "Browse")) {
+                    const actionRequest = c.UpnpActionRequest_get_ActionRequest(request);
+
+                    const nodes = c.ixmlDocument_getElementsByTagName(actionRequest, "ObjectID");
+                    defer c.ixmlNodeList_free(nodes);
+                    if (nodes == null) {
+                        std.log.err("no ObjectId nodes found", .{});
+                        return 0;
+                    }
+
+                    const node = c.ixmlNodeList_item(nodes, 0);
+                    if (node == null) {
+                        std.log.err("no ObjectId nodes found", .{});
+                        return 0;
+                    }
+
+                    const objectId = std.mem.span(c.ixmlNode_getNodeValue(c.ixmlNode_getFirstChild(node)));
+                    std.log.info("ObjectId: {s}", .{objectId});
+
+                    const doc = c.ixmlDocument_createDocument();
+                    const root = c.ixmlDocument_createElementNS(
+                        doc,
+                        "urn:schemas-upnp-org:service:ContentDirectory:1",
+                        "u:BrowseResponse",
+                    );
+                    _ = c.ixmlElement_setAttributeNS(
+                        root,
+                        "urn:schemas-upnp-org:service:ContentDirectory:1",
+                        "xmlns:u",
+                        "urn:schemas-upnp-org:service:ContentDirectory:1",
+                    );
+                    _ = c.ixmlNode_appendChild(@ptrCast(doc), @ptrCast(root));
+
+                    const didl_doc = c.ixmlDocument_createDocument();
+                    const didl_root = c.ixmlDocument_createElementNS(
+                        didl_doc,
+                        "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/",
+                        "DIDL-Lite",
+                    );
+                    _ = c.ixmlElement_setAttribute(
+                        didl_root,
+                        "xmlns:dc",
+                        "http://purl.org/dc/elements/1.1/",
+                    );
+                    _ = c.ixmlElement_setAttribute(
+                        didl_root,
+                        "xmlns:upnp",
+                        "urn:schemas-upnp-org:metadata-1-0/upnp/",
+                    );
+                    _ = c.ixmlNode_appendChild(@ptrCast(didl_doc), @ptrCast(didl_root));
+
+                    const container = c.ixmlDocument_createElement(didl_doc, "container");
+                    _ = c.ixmlElement_setAttribute(container, "id", "1");
+                    _ = c.ixmlElement_setAttribute(container, "parentID", "0");
+                    _ = c.ixmlElement_setAttribute(container, "restricted", "1");
+
+                    const dc_title = c.ixmlDocument_createElementNS(
+                        didl_doc,
+                        "http://purl.org/dc/elements/1.1/",
+                        "dc:title",
+                    );
+                    const title_text = c.ixmlDocument_createTextNode(didl_doc, "Albums");
+                    _ = c.ixmlNode_appendChild(@ptrCast(dc_title), @ptrCast(title_text));
+                    _ = c.ixmlNode_appendChild(@ptrCast(container), @ptrCast(dc_title));
+
+                    const upnp_class = c.ixmlDocument_createElementNS(
+                        didl_doc,
+                        "urn:schemas-upnp-org:metadata-1-0/upnp/",
+                        "upnp:class",
+                    );
+                    const class_text = c.ixmlDocument_createTextNode(didl_doc, "object.container");
+                    _ = c.ixmlNode_appendChild(@ptrCast(upnp_class), @ptrCast(class_text));
+                    _ = c.ixmlNode_appendChild(@ptrCast(container), @ptrCast(upnp_class));
+
+                    _ = c.ixmlNode_appendChild(@ptrCast(didl_root), @ptrCast(container));
+
+                    const didl_string = c.ixmlDocumenttoString(didl_doc);
+                    defer c.ixmlFreeDOMString(didl_string);
+
+                    add_element(doc, root, "Result", didl_string);
+                    add_element(doc, root, "NumberReturned", "1");
+                    add_element(doc, root, "TotalMatches", "1");
+                    add_element(doc, root, "UpdateID", "1");
+
+                    const mutableRequest: *c.UpnpActionRequest = @constCast(request);
+                    _ = c.UpnpActionRequest_set_ActionResult(mutableRequest, doc);
+                }
+            }
+        },
+        else => {
+            std.log.info("Unhandled event type: {}", .{event_type});
+        },
+    }
+
     return 0;
+}
+
+fn add_element(doc: *c.IXML_Document, parent: *c.IXML_Element, name: [*c]const u8, value: [*c]const u8) void {
+    const el = c.ixmlDocument_createElement(doc, name);
+    const text = c.ixmlDocument_createTextNode(doc, value);
+
+    _ = c.ixmlNode_appendChild(@ptrCast(el), @ptrCast(text));
+    _ = c.ixmlNode_appendChild(@ptrCast(parent), @ptrCast(el));
 }
 
 const deviceXml = @embedFile("device.xml");
