@@ -1,15 +1,21 @@
 const std = @import("std");
+const ImmichApi = @import("./immich-api.zig");
 
 const c = @cImport({
     @cInclude("upnp/upnp.h");
 });
+
+const UpnpCallbackContext = struct {
+    allocator: std.mem.Allocator,
+    immichClient: ImmichApi,
+};
 
 fn upnpCallback(
     event_type: c.Upnp_EventType,
     event: ?*const anyopaque,
     cookie: ?*anyopaque,
 ) callconv(.c) c_int {
-    _ = cookie;
+    const ctx: *UpnpCallbackContext = @ptrCast(@alignCast(cookie));
 
     std.log.info("Event type: {}", .{event_type});
 
@@ -23,15 +29,37 @@ fn upnpCallback(
             switch (request.service) {
                 .contentDirectory => |serviceAction| switch (serviceAction) {
                     .browse => |action| {
-                        var albums: []const Album = undefined;
+                        var resources: std.ArrayList(Album) = .{};
                         if (std.mem.eql(u8, action.objectId, "0")) {
-                            albums = &[_]Album{.{ .id = "1", .parentId = action.objectId, .name = "Test Album" }};
-                        } else {
-                            albums = &[_]Album{};
+                            const albums = ctx.immichClient.getAlbums() catch {
+                                std.log.err("[upnpCallback] Failed to fetch albums", .{});
+                                return 0;
+                            };
+                            defer albums.deinit();
+
+                            for (albums.value) |album| {
+                                resources.append(ctx.allocator, Album{
+                                    .id = ctx.allocator.dupeZ(u8, album.id) catch {
+                                        std.log.err("[upnpCallback] Failed to allocate memory", .{});
+                                        return 0;
+                                    },
+                                    .name = ctx.allocator.dupeZ(u8, album.albumName) catch {
+                                        std.log.err("[upnpCallback] Failed to allocate memory", .{});
+                                        return 0;
+                                    },
+                                    .parentId = "1",
+                                }) catch {
+                                    std.log.err("[upnpCallback] Failed to allocate memory", .{});
+                                    return 0;
+                                };
+                            }
                         }
 
                         const response = BrowseReponse{
-                            .albums = albums,
+                            .albums = resources.toOwnedSlice(ctx.allocator) catch {
+                                std.log.err("[upnpCallback] Failed to allocate memory", .{});
+                                return 0;
+                            },
                             .totalMatches = "1",
                             .numberReturned = "1",
                             .updateId = "1",
@@ -219,8 +247,6 @@ const Album = struct {
 };
 
 const deviceXml = @embedFile("device.xml");
-const contentDirectoryXml = @embedFile("contentDirectory.xml");
-const connectionManagerXml = @embedFile("connectionManager.xml");
 
 pub fn main() !void {
     const port: c.ushort = 8888; // auto-select port
@@ -236,13 +262,29 @@ pub fn main() !void {
 
     var handle: c.UpnpDevice_Handle = 0;
 
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+    defer {
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) std.testing.expect(false) catch @panic("TEST FAIL");
+    }
+
+    const allocator = gpa.allocator();
+    const context = UpnpCallbackContext{
+        .allocator = allocator,
+        .immichClient = ImmichApi.init(
+            allocator,
+            "rETcQbd3iHV5UseeCxfLRknNKDTkddSocw3ESZCqiyQ",
+            "http://localhost:2283/api",
+        ),
+    };
+
     const rc = c.UpnpRegisterRootDevice2(
         c.UPNPREG_BUF_DESC,
         deviceXml,
         deviceXml.len,
         1,
         upnpCallback,
-        null,
+        &context,
         &handle,
     );
     if (rc != c.UPNP_E_SUCCESS) {
