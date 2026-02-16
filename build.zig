@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_exe.step);
 
     const exe_check = b.addExecutable(.{
-        .name = "foo",
+        .name = "immich-dlna-check",
         .root_module = exe_mod,
     });
     const check = b.step("check", "Check if main compiles");

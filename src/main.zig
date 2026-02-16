@@ -15,46 +15,34 @@ fn upnpCallback(
 
     switch (event_type) {
         c.UPNP_CONTROL_ACTION_REQUEST => {
-            const request: *const c.UpnpActionRequest = @ptrCast(event);
-            const serviceId = std.mem.span(c.UpnpActionRequest_get_ServiceID_cstr(request));
-            const action = std.mem.span(c.UpnpActionRequest_get_ActionName_cstr(request));
+            var request = ActionRequest.initFromEvent(@ptrCast(@constCast(event)));
 
-            std.log.info("action request {s} {s}", .{ serviceId, action });
+            std.log.info("action request {s} {s}", .{ request.serviceId, request.actionName });
 
-            if (std.mem.eql(u8, serviceId, "urn:upnp-org:serviceId:ContentDirectory")) {
-                if (std.mem.eql(u8, action, "Browse")) {
-                    const actionRequest = c.UpnpActionRequest_get_ActionRequest(request);
+            const serviceRequest = request.getActionRequest() catch {
+                return 0;
+            };
+            switch (serviceRequest) {
+                .contentDirectory => |serviceAction| switch (serviceAction) {
+                    .browse => |action| {
+                        const response = BrowseReponse{
+                            .albums = &[_]Album{.{ .id = "1", .parentId = action.objectId, .name = "Test Album" }},
+                            .totalMatches = "1",
+                            .numberReturned = "1",
+                            .updateId = "1",
+                        };
 
-                    const nodes = c.ixmlDocument_getElementsByTagName(actionRequest, "ObjectID");
-                    defer c.ixmlNodeList_free(nodes);
-                    if (nodes == null) {
-                        std.log.err("no ObjectId nodes found", .{});
-                        return 0;
-                    }
+                        const doc = response.toIXMLDocument();
 
-                    const node = c.ixmlNodeList_item(nodes, 0);
-                    if (node == null) {
-                        std.log.err("no ObjectId nodes found", .{});
-                        return 0;
-                    }
+                        std.log.info("Response: {s}", .{c.ixmlDocumenttoString(doc)});
 
-                    const objectId = std.mem.span(c.ixmlNode_getNodeValue(c.ixmlNode_getFirstChild(node)));
-                    std.log.info("ObjectId: {s}", .{objectId});
+                        request.setActionResult(doc);
+                    },
+                },
+            }
 
-                    const response = BrowseReponse{
-                        .albums = &[_]Album{.{ .id = "1", .parentId = "0", .name = "Test Album" }},
-                        .totalMatches = "1",
-                        .numberReturned = "1",
-                        .updateId = "1",
-                    };
-
-                    const mutableRequest: *c.UpnpActionRequest = @constCast(request);
-                    const doc = response.toIXMLDocument();
-
-                    std.log.info("Response: {s}", .{c.ixmlDocumenttoString(doc)});
-
-                    _ = c.UpnpActionRequest_set_ActionResult(mutableRequest, doc);
-                }
+            if (std.mem.eql(u8, request.serviceId, "urn:upnp-org:serviceId:ContentDirectory")) {
+                if (std.mem.eql(u8, request.actionName, "Browse")) {}
             }
         },
         else => {
@@ -64,6 +52,76 @@ fn upnpCallback(
 
     return 0;
 }
+
+const ContentDirectoryBrowseAction = struct {
+    objectId: [:0]const u8,
+
+    pub fn initFromIXMLDocument(document: *c.struct__IXML_Document) !ContentDirectoryBrowseAction {
+        const nodes = c.ixmlDocument_getElementsByTagName(document, "ObjectID");
+        defer c.ixmlNodeList_free(nodes);
+        if (nodes == null) {
+            std.log.err("[ContentDirectoryBrowseAction.initFromIXMLDocument] no ObjectId nodes found", .{});
+            return error.InvalidMessage;
+        }
+
+        const node = c.ixmlNodeList_item(nodes, 0);
+        if (node == null) {
+            std.log.err("[ContentDirectoryBrowseAction.initFromIXMLDocument] no ObjectId nodes found", .{});
+            return error.InvalidMessage;
+        }
+
+        const objectId = std.mem.span(
+            c.ixmlNode_getNodeValue(c.ixmlNode_getFirstChild(node)),
+        );
+        std.log.debug("[ContentDirectoryBrowseAction.initFromIXMLDocument] ObjectId: {s}", .{objectId});
+
+        return ContentDirectoryBrowseAction{ .objectId = objectId };
+    }
+};
+
+const ActionRequest = struct {
+    rawRequest: *c.UpnpActionRequest,
+    serviceId: [:0]const u8,
+    actionName: [:0]const u8,
+    requestDocument: *c.struct__IXML_Document,
+
+    pub fn initFromEvent(request: *c.UpnpActionRequest) ActionRequest {
+        const serviceId = std.mem.span(c.UpnpActionRequest_get_ServiceID_cstr(request));
+        const actionName = std.mem.span(c.UpnpActionRequest_get_ActionName_cstr(request));
+        const requestDocument = c.UpnpActionRequest_get_ActionRequest(request);
+
+        return ActionRequest{
+            .rawRequest = request,
+            .serviceId = serviceId,
+            .actionName = actionName,
+            .requestDocument = requestDocument,
+        };
+    }
+
+    pub fn setActionResult(self: *ActionRequest, document: *c.struct__IXML_Document) void {
+        _ = c.UpnpActionRequest_set_ActionResult(self.rawRequest, document);
+    }
+
+    pub fn getActionRequest(self: *const ActionRequest) !ActionRequestType {
+        if (std.mem.eql(u8, self.serviceId, "urn:upnp-org:serviceId:ContentDirectory")) {
+            if (std.mem.eql(u8, self.actionName, "Browse")) {
+                return .{
+                    .contentDirectory = .{
+                        .browse = try ContentDirectoryBrowseAction.initFromIXMLDocument(self.requestDocument),
+                    },
+                };
+            }
+        }
+
+        return error.UnsupportedAction;
+    }
+
+    const ActionRequestType = union(enum) {
+        contentDirectory: union(enum) {
+            browse: ContentDirectoryBrowseAction,
+        },
+    };
+};
 
 const BrowseReponse = struct {
     albums: []const Album,
