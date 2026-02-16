@@ -15,26 +15,29 @@ fn upnpCallback(
 
     switch (event_type) {
         c.UPNP_CONTROL_ACTION_REQUEST => {
-            var request = ActionRequest.initFromEvent(@ptrCast(@constCast(event)));
-
-            std.log.info("action request {s} {s}", .{ request.serviceId, request.actionName });
-
-            const serviceRequest = request.getActionRequest() catch {
+            var request = ActionRequest.initFromEvent(@ptrCast(@constCast(event))) catch {
+                std.log.err("[upnpCallback] Failed to parse action request", .{});
                 return 0;
             };
-            switch (serviceRequest) {
+
+            switch (request.service) {
                 .contentDirectory => |serviceAction| switch (serviceAction) {
                     .browse => |action| {
+                        var albums: []const Album = undefined;
+                        if (std.mem.eql(u8, action.objectId, "0")) {
+                            albums = &[_]Album{.{ .id = "1", .parentId = action.objectId, .name = "Test Album" }};
+                        } else {
+                            albums = &[_]Album{};
+                        }
+
                         const response = BrowseReponse{
-                            .albums = &[_]Album{.{ .id = "1", .parentId = action.objectId, .name = "Test Album" }},
+                            .albums = albums,
                             .totalMatches = "1",
                             .numberReturned = "1",
                             .updateId = "1",
                         };
 
                         const doc = response.toIXMLDocument();
-
-                        std.log.info("Response: {s}", .{c.ixmlDocumenttoString(doc)});
 
                         request.setActionResult(doc);
                     },
@@ -46,7 +49,7 @@ fn upnpCallback(
             }
         },
         else => {
-            std.log.info("Unhandled event type: {}", .{event_type});
+            std.log.info("[upnpCallback] Unhandled event type: {}", .{event_type});
         },
     }
 
@@ -84,42 +87,52 @@ const ActionRequest = struct {
     serviceId: [:0]const u8,
     actionName: [:0]const u8,
     requestDocument: *c.struct__IXML_Document,
+    service: Service,
 
-    pub fn initFromEvent(request: *c.UpnpActionRequest) ActionRequest {
+    pub fn initFromEvent(request: *c.UpnpActionRequest) !ActionRequest {
         const serviceId = std.mem.span(c.UpnpActionRequest_get_ServiceID_cstr(request));
         const actionName = std.mem.span(c.UpnpActionRequest_get_ActionName_cstr(request));
         const requestDocument = c.UpnpActionRequest_get_ActionRequest(request);
+
+        std.log.debug("[ActionRequest.initFromEvent] serviceId: {s}, actionName: {s}", .{ serviceId, actionName });
+
+        var service: Service = undefined;
+        if (std.mem.eql(u8, serviceId, "urn:upnp-org:serviceId:ContentDirectory")) {
+            if (std.mem.eql(u8, actionName, "Browse")) {
+                service = Service{
+                    .contentDirectory = .{
+                        .browse = try ContentDirectoryBrowseAction.initFromIXMLDocument(requestDocument),
+                    },
+                };
+            } else {
+                std.log.err("[ActionRequest.initFromEvent] Unsupported ContentDirectory action: {s}", .{actionName});
+                return error.UnsupportAction;
+            }
+        } else {
+            std.log.err("[ActionRequest.initFromEvent] Unsupported service: {s}", .{serviceId});
+            return error.UnsupportService;
+        }
 
         return ActionRequest{
             .rawRequest = request,
             .serviceId = serviceId,
             .actionName = actionName,
             .requestDocument = requestDocument,
+            .service = service,
         };
     }
 
     pub fn setActionResult(self: *ActionRequest, document: *c.struct__IXML_Document) void {
+        std.log.debug("[ActionRequest.setActionResult] Response: {s}", .{c.ixmlDocumenttoString(document)});
         _ = c.UpnpActionRequest_set_ActionResult(self.rawRequest, document);
     }
 
-    pub fn getActionRequest(self: *const ActionRequest) !ActionRequestType {
-        if (std.mem.eql(u8, self.serviceId, "urn:upnp-org:serviceId:ContentDirectory")) {
-            if (std.mem.eql(u8, self.actionName, "Browse")) {
-                return .{
-                    .contentDirectory = .{
-                        .browse = try ContentDirectoryBrowseAction.initFromIXMLDocument(self.requestDocument),
-                    },
-                };
-            }
-        }
+    const Service = union(enum) {
+        contentDirectory: ContentDirectory,
 
-        return error.UnsupportedAction;
-    }
-
-    const ActionRequestType = union(enum) {
-        contentDirectory: union(enum) {
+        const ContentDirectory = union(enum) {
             browse: ContentDirectoryBrowseAction,
-        },
+        };
     };
 };
 
@@ -205,28 +218,6 @@ const Album = struct {
     }
 };
 
-const IXMLAttribute = struct {
-    name: [:0]const u8,
-    value: [:0]const u8,
-};
-
-const IXMLElement = union(enum) {
-    element: struct {
-        name: [:0]const u8,
-        attributes: []const IXMLAttribute,
-        children: []const IXMLElement,
-    },
-    text: [:0]const u8,
-};
-
-fn add_element(doc: *c.IXML_Document, parent: *c.IXML_Element, name: [*c]const u8, value: [*c]const u8) void {
-    const el = c.ixmlDocument_createElement(doc, name);
-    const text = c.ixmlDocument_createTextNode(doc, value);
-
-    _ = c.ixmlNode_appendChild(@ptrCast(el), @ptrCast(text));
-    _ = c.ixmlNode_appendChild(@ptrCast(parent), @ptrCast(el));
-}
-
 const deviceXml = @embedFile("device.xml");
 const contentDirectoryXml = @embedFile("contentDirectory.xml");
 const connectionManagerXml = @embedFile("connectionManager.xml");
@@ -237,11 +228,11 @@ pub fn main() !void {
 
     const result = c.UpnpInit2(ip_address, port);
     if (result != c.UPNP_E_SUCCESS) {
-        std.log.err("Failed to initialize UPnP: {}\n", .{result});
+        std.log.err("[main] Failed to initialize UPnP: {}", .{result});
         return;
     }
 
-    std.log.info("UPnP initialized successfully!\n", .{});
+    std.log.debug("[main] UPnP initialized successfully!", .{});
 
     var handle: c.UpnpDevice_Handle = 0;
 
@@ -255,16 +246,16 @@ pub fn main() !void {
         &handle,
     );
     if (rc != c.UPNP_E_SUCCESS) {
-        std.log.err("RegisterRootDevice2 failed: {}", .{rc});
+        std.log.err("[main] RegisterRootDevice2 failed: {}", .{rc});
         return error.RegisterFailed;
     }
 
-    std.log.info("Root device registered", .{});
+    std.log.debug("[main] Root device registered", .{});
 
     // Advertise every 60 seconds
     _ = c.UpnpSendAdvertisement(handle, 60);
 
-    std.log.info("Advertisements sent", .{});
+    std.log.debug("[main] Advertisements sent", .{});
 
     // Keep process alive
     std.Thread.sleep(300 * std.time.ns_per_s);
