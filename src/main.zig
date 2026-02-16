@@ -29,16 +29,16 @@ fn upnpCallback(
             switch (request.service) {
                 .contentDirectory => |serviceAction| switch (serviceAction) {
                     .browse => |action| {
-                        var resources: std.ArrayList(Album) = .{};
+                        var resources: std.ArrayList(BrowseReponse.Resource) = .{};
                         if (std.mem.eql(u8, action.objectId, "0")) {
-                            const albums = ctx.immichClient.getAlbums() catch {
-                                std.log.err("[upnpCallback] Failed to fetch albums", .{});
+                            const albums = ctx.immichClient.getAlbums() catch |err| {
+                                std.log.err("[upnpCallback] Failed to fetch albums {}", .{err});
                                 return 0;
                             };
                             defer albums.deinit();
 
                             for (albums.value) |album| {
-                                resources.append(ctx.allocator, Album{
+                                resources.append(ctx.allocator, .{ .album = Album{
                                     .id = ctx.allocator.dupeZ(u8, album.id) catch {
                                         std.log.err("[upnpCallback] Failed to allocate memory", .{});
                                         return 0;
@@ -48,7 +48,39 @@ fn upnpCallback(
                                         return 0;
                                     },
                                     .parentId = "1",
-                                }) catch {
+                                } }) catch {
+                                    std.log.err("[upnpCallback] Failed to allocate memory", .{});
+                                    return 0;
+                                };
+                            }
+                        } else {
+                            const album = ctx.immichClient.getAlbum(action.objectId) catch |err| {
+                                std.log.err("[upnpCallback] Failed to fetch albums {}", .{err});
+                                return 0;
+                            };
+                            defer album.deinit();
+
+                            for (album.value.assets) |asset| {
+                                resources.append(ctx.allocator, .{ .asset = Asset{
+                                    .id = ctx.allocator.dupeZ(u8, asset.id) catch {
+                                        std.log.err("[upnpCallback] Failed to allocate memory", .{});
+                                        return 0;
+                                    },
+                                    .name = ctx.allocator.dupeZ(u8, asset.id) catch {
+                                        std.log.err("[upnpCallback] Failed to allocate memory", .{});
+                                        return 0;
+                                    },
+                                    .parentId = ctx.allocator.dupeZ(u8, album.value.id) catch {
+                                        std.log.err("[upnpCallback] Failed to allocate memory", .{});
+                                        return 0;
+                                    },
+                                    .width = 0,
+                                    .height = 0,
+                                    .mimeType = ctx.allocator.dupeZ(u8, asset.originalMimeType orelse "") catch {
+                                        std.log.err("[upnpCallback] Failed to allocate memory", .{});
+                                        return 0;
+                                    },
+                                } }) catch {
                                     std.log.err("[upnpCallback] Failed to allocate memory", .{});
                                     return 0;
                                 };
@@ -56,7 +88,7 @@ fn upnpCallback(
                         }
 
                         const response = BrowseReponse{
-                            .albums = resources.toOwnedSlice(ctx.allocator) catch {
+                            .resources = resources.toOwnedSlice(ctx.allocator) catch {
                                 std.log.err("[upnpCallback] Failed to allocate memory", .{});
                                 return 0;
                             },
@@ -165,7 +197,12 @@ const ActionRequest = struct {
 };
 
 const BrowseReponse = struct {
-    albums: []const Album,
+    const Resource = union(enum) {
+        album: Album,
+        asset: Asset,
+    };
+
+    resources: []const Resource,
     updateId: [:0]const u8,
     numberReturned: [:0]const u8,
     totalMatches: [:0]const u8,
@@ -173,13 +210,23 @@ const BrowseReponse = struct {
     pub fn toIXMLDocument(self: *const BrowseReponse) [*c]c.struct__IXML_Document {
         const didlDocument = c.ixmlDocument_createDocument();
         const didlElement = c.ixmlDocument_createElement(didlDocument, "DIDL-Lite");
+        _ = c.ixmlElement_setAttribute(didlElement, "xmlns", "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/");
         _ = c.ixmlElement_setAttribute(didlElement, "xmlns:dc", "http://purl.org/dc/elements/1.1/");
         _ = c.ixmlElement_setAttribute(didlElement, "xmlns:upnp", "urn:schemas-upnp-org:metadata-1-0/upnp/");
+        _ = c.ixmlElement_setAttribute(didlElement, "xmlns:dlna", "urn:schemas-dlna-org:metadata-1-0/");
         _ = c.ixmlNode_appendChild(@ptrCast(didlDocument), @ptrCast(didlElement));
 
-        for (self.albums) |album| {
-            const albumElement = album.toIXMLElement(@ptrCast(didlDocument));
-            _ = c.ixmlNode_appendChild(@ptrCast(didlElement), @ptrCast(albumElement));
+        for (self.resources) |resource| {
+            switch (resource) {
+                .album => |album| {
+                    const albumElement = album.toIXMLElement(@ptrCast(didlDocument));
+                    _ = c.ixmlNode_appendChild(@ptrCast(didlElement), @ptrCast(albumElement));
+                },
+                .asset => |asset| {
+                    const assetElement = asset.toIXMLElement(@ptrCast(didlDocument));
+                    _ = c.ixmlNode_appendChild(@ptrCast(didlElement), @ptrCast(assetElement));
+                },
+            }
         }
 
         const didlStr = c.ixmlDocumenttoString(didlDocument);
@@ -218,6 +265,43 @@ const BrowseReponse = struct {
         }
 
         return document;
+    }
+};
+
+const Asset = struct {
+    id: [:0]const u8,
+    parentId: [:0]const u8,
+    name: [:0]const u8,
+    mimeType: [:0]const u8,
+    width: u32,
+    height: u32,
+
+    pub fn toIXMLElement(self: *const Asset, document: *c.struct__IXML_Document) [*c]c.struct__IXML_Element {
+        const albumElement = c.ixmlDocument_createElement(document, "item");
+        _ = c.ixmlElement_setAttribute(albumElement, "id", self.id);
+        _ = c.ixmlElement_setAttribute(albumElement, "parentID", self.parentId);
+        _ = c.ixmlElement_setAttribute(albumElement, "restricted", "1");
+
+        const titleElement = c.ixmlDocument_createElement(document, "dc:title");
+        const titleText = c.ixmlDocument_createTextNode(document, self.name);
+        _ = c.ixmlNode_appendChild(@ptrCast(titleElement), @ptrCast(titleText));
+        _ = c.ixmlNode_appendChild(@ptrCast(albumElement), @ptrCast(titleElement));
+
+        const classElement = c.ixmlDocument_createElement(document, "upnp:class");
+        const classText = c.ixmlDocument_createTextNode(document, "object.item.imageItem.photo");
+        _ = c.ixmlNode_appendChild(@ptrCast(classElement), @ptrCast(classText));
+        _ = c.ixmlNode_appendChild(@ptrCast(albumElement), @ptrCast(classElement));
+
+        const resElement = c.ixmlDocument_createElement(document, "res");
+        var buf: [1024]u8 = undefined;
+        _ = c.ixmlElement_setAttribute(albumElement, "protocolInfo", std.fmt.bufPrintZ(&buf, "http-get:*:{s}:DLNA.ORG_OP=01;DLNA.ORG_CI=0", .{self.mimeType}) catch "");
+        _ = c.ixmlElement_setAttribute(albumElement, "resolution", std.fmt.bufPrintZ(&buf, "{d}x{d}", .{ self.width, self.height }) catch "");
+        _ = c.ixmlElement_setAttribute(albumElement, "size", std.fmt.bufPrintZ(&buf, "{d}", .{0}) catch "");
+        const resText = c.ixmlDocument_createTextNode(document, "https://picsum.photos/200/300");
+        _ = c.ixmlNode_appendChild(@ptrCast(resElement), @ptrCast(resText));
+        _ = c.ixmlNode_appendChild(@ptrCast(albumElement), @ptrCast(resElement));
+
+        return albumElement;
     }
 };
 
