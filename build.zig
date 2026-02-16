@@ -1,6 +1,15 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const upnp_mod = b.addModule("upnp", .{
+        .root_source_file = b.path("src/upnp/upnp.zig"),
+        .target = b.graph.host,
+        .link_libc = true,
+    });
+    upnp_mod.linkSystemLibrary("upnp", .{
+        .use_pkg_config = .yes,
+    });
+
     const exe_mod = b.addModule("main", .{
         .root_source_file = b.path("src/main.zig"),
         .target = b.graph.host,
@@ -9,6 +18,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.linkSystemLibrary("upnp", .{
         .use_pkg_config = .yes,
     });
+    exe_mod.addImport("upnp", upnp_mod);
 
     const exe = b.addExecutable(.{
         .name = "immich-dlna",
