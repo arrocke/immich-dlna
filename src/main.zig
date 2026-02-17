@@ -8,7 +8,8 @@ const c = @cImport({
 
 const UpnpCallbackContext = struct {
     allocator: std.mem.Allocator,
-    immichClient: ImmichApi,
+    immichBaseUrl: []const u8,
+    immichApiKey: []const u8,
 };
 
 const UpnpFileCallbackContext = struct {};
@@ -127,6 +128,8 @@ fn upnpGetInfoCallback(pathCstr: [*c]const u8, fileInfo: ?*c.UpnpFileInfo, cooki
         _ = c.UpnpFileInfo_set_IsDirectory(fileInfo, 0);
         _ = c.UpnpFileInfo_set_LastModified(fileInfo, std.time.timestamp());
     } else if (std.mem.startsWith(u8, path, "/assets/")) {
+        var immichClient = ImmichApi.init(ctx.allocator, ctx.immichApiKey, ctx.immichBaseUrl);
+
         const startIndex = std.mem.lastIndexOfScalar(u8, path, '/') orelse {
             std.log.err("[upnpGetInfoCallback] asset path malformed", .{});
             return -1;
@@ -139,7 +142,7 @@ fn upnpGetInfoCallback(pathCstr: [*c]const u8, fileInfo: ?*c.UpnpFileInfo, cooki
 
         std.log.info("[upnpGetInfoCallback] Asset ID: {s}", .{id});
 
-        const asset = ctx.immichClient.getAsset(id) catch {
+        const asset = immichClient.getAsset(id) catch {
             std.log.err("[upnpGetInfoCallback] asset not found", .{});
             return -1;
         };
@@ -216,6 +219,8 @@ fn upnpOpenCallback(pathCstr: [*c]const u8, fileMode: c.enum_UpnpOpenFileMode, c
 
         return handle;
     } else if (std.mem.startsWith(u8, path, "/assets/")) {
+        var immichClient = ImmichApi.init(ctx.allocator, ctx.immichApiKey, ctx.immichBaseUrl);
+
         const startIndex = std.mem.lastIndexOfScalar(u8, path, '/') orelse {
             std.log.err("[upnpOpenCallback] asset path malformed", .{});
             return null;
@@ -228,7 +233,7 @@ fn upnpOpenCallback(pathCstr: [*c]const u8, fileMode: c.enum_UpnpOpenFileMode, c
 
         std.log.info("[upnpOpenCallback] Asset ID: {s}", .{id});
 
-        const asset = ctx.immichClient.getAsset(id) catch {
+        const asset = immichClient.getAsset(id) catch {
             std.log.err("[upnpOpenCallback] asset not found", .{});
             return null;
         };
@@ -351,9 +356,11 @@ fn upnpCallback(
             switch (request.service) {
                 .contentDirectory => |serviceAction| switch (serviceAction) {
                     .browse => |action| {
+                        var immichClient = ImmichApi.init(ctx.allocator, ctx.immichApiKey, ctx.immichBaseUrl);
+
                         var resources: std.ArrayList(BrowseReponse.Resource) = .{};
                         if (std.mem.eql(u8, action.objectId, "0")) {
-                            const albums = ctx.immichClient.getAlbums() catch |err| {
+                            const albums = immichClient.getAlbums() catch |err| {
                                 std.log.err("[upnpCallback] Failed to fetch albums {}", .{err});
                                 return 0;
                             };
@@ -376,7 +383,7 @@ fn upnpCallback(
                                 };
                             }
                         } else {
-                            const album = ctx.immichClient.getAlbum(action.objectId) catch |err| {
+                            const album = immichClient.getAlbum(action.objectId) catch |err| {
                                 std.log.err("[upnpCallback] Failed to fetch albums {}", .{err});
                                 return 0;
                             };
@@ -666,20 +673,11 @@ pub fn main() !void {
 
     var handle: c.UpnpDevice_Handle = 0;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
-    defer {
-        const deinit_status = gpa.deinit();
-        if (deinit_status == .leak) std.testing.expect(false) catch @panic("TEST FAIL");
-    }
-
-    const allocator = gpa.allocator();
+    const allocator = std.heap.c_allocator;
     const context = UpnpCallbackContext{
         .allocator = allocator,
-        .immichClient = ImmichApi.init(
-            allocator,
-            "rETcQbd3iHV5UseeCxfLRknNKDTkddSocw3ESZCqiyQ",
-            "http://localhost:2283/api",
-        ),
+        .immichApiKey = "rETcQbd3iHV5UseeCxfLRknNKDTkddSocw3ESZCqiyQ",
+        .immichBaseUrl = "http://localhost:2283/api",
     };
 
     _ = c.UpnpVirtualDir_set_GetInfoCallback(upnpGetInfoCallback);
