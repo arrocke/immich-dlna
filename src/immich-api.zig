@@ -72,6 +72,32 @@ pub fn getAlbum(self: *Self, id: []const u8) !std.json.Parsed(Album) {
     return album;
 }
 
+pub fn getAsset(self: *Self, id: []const u8) !std.json.Parsed(Asset) {
+    var body = std.Io.Writer.Allocating.init(self.allocator);
+    defer body.deinit();
+
+    const url = try std.fmt.allocPrint(self.allocator, "{s}/assets/{s}", .{ self.baseUrl, id });
+    defer self.allocator.free(url);
+
+    const response = try self.client.fetch(.{
+        .location = .{ .url = url },
+        .method = .GET,
+        .extra_headers = &[_]std.http.Header{
+            .{ .name = "x-api-key", .value = self.apiKey },
+        },
+        .response_writer = &body.writer,
+    });
+
+    if (response.status != .ok) {
+        std.log.err("Request failed with status: {}\n", .{response.status});
+        return error.HttpRequestFailed;
+    }
+
+    const asset: std.json.Parsed(Asset) = try std.json.parseFromSlice(Asset, self.allocator, body.written(), .{ .ignore_unknown_fields = true });
+
+    return asset;
+}
+
 pub const Album = struct {
     id: []u8,
     albumName: []u8,
@@ -88,5 +114,7 @@ pub const Asset = struct {
 
     id: []u8,
     originalMimeType: ?[]u8,
+    originalPath: ?[]u8,
     exifInfo: EixfInfo,
+    updatedAt: []u8,
 };

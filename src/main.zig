@@ -1,4 +1,5 @@
 const std = @import("std");
+const zeit = @import("zeit");
 const ImmichApi = @import("./immich-api.zig");
 
 const c = @cImport({
@@ -9,6 +10,188 @@ const UpnpCallbackContext = struct {
     allocator: std.mem.Allocator,
     immichClient: ImmichApi,
 };
+
+const UpnpFileCallbackContext = struct {};
+
+const UpnpVirtualHandle = struct {
+    file: std.fs.File,
+};
+
+fn upnpGetInfoCallback(pathCstr: [*c]const u8, fileInfo: ?*c.UpnpFileInfo, cookie: ?*const anyopaque, requestCookie: [*c]?*const anyopaque) callconv(.c) c_int {
+    _ = requestCookie;
+    const ctx: *UpnpCallbackContext = @ptrCast(@alignCast(@constCast(cookie)));
+
+    const path = std.mem.span(pathCstr);
+
+    const startIndex = std.mem.lastIndexOfScalar(u8, path, '/') orelse {
+        std.log.err("[upnpGetInfoCallback] asset path malformed", .{});
+        return -1;
+    };
+    const endIndex = std.mem.lastIndexOfScalar(u8, path, '.') orelse {
+        std.log.err("[upnpGetInfoCallback] asset path malformed", .{});
+        return -1;
+    };
+    const id = path[(startIndex + 1)..endIndex];
+
+    std.log.info("[upnpGetInfoCallback] Asset ID: {s}", .{id});
+
+    const asset = ctx.immichClient.getAsset(id) catch {
+        std.log.err("[upnpGetInfoCallback] asset not found", .{});
+        return -1;
+    };
+    defer asset.deinit();
+
+    std.log.debug("[upnpGetInfoCallback] found asset", .{});
+
+    _ = c.UpnpFileInfo_set_FileLength(fileInfo, asset.value.exifInfo.fileSizeInByte);
+    if (asset.value.originalMimeType) |mimeType| {
+        const cstr = ctx.allocator.dupeZ(u8, mimeType) catch {
+            std.log.err("[upnpGetInfoCallback] failed to create mime type", .{});
+            return -1;
+        };
+        defer ctx.allocator.free(cstr);
+
+        std.log.debug("[upnpGetInfoCallback] parsed mime type", .{});
+
+        _ = c.UpnpFileInfo_set_ContentType(fileInfo, cstr);
+    }
+    _ = c.UpnpFileInfo_set_IsReadable(fileInfo, 1);
+    _ = c.UpnpFileInfo_set_IsDirectory(fileInfo, 0);
+
+    const updatedAt = zeit.instant(.{
+        .source = .{
+            .iso8601 = asset.value.updatedAt,
+        },
+    }) catch {
+        std.log.err("[upnpGetInfoCallback] failed to parse updated at date", .{});
+        return -1;
+    };
+    std.log.debug("[upnpGetInfoCallback] parsed updated date", .{});
+    _ = c.UpnpFileInfo_set_LastModified(fileInfo, updatedAt.unixTimestamp());
+
+    return 0;
+}
+
+fn upnpOpenCallback(pathCstr: [*c]const u8, fileMode: c.enum_UpnpOpenFileMode, cookie: ?*const anyopaque, requestCookie: ?*const anyopaque) callconv(.c) ?*anyopaque {
+    _ = fileMode;
+    _ = requestCookie;
+
+    const ctx: *UpnpCallbackContext = @ptrCast(@alignCast(@constCast(cookie)));
+
+    const path = std.mem.span(pathCstr);
+
+    const startIndex = std.mem.lastIndexOfScalar(u8, path, '/') orelse {
+        std.log.err("[upnpOpenCallback] asset path malformed", .{});
+        return null;
+    };
+    const endIndex = std.mem.lastIndexOfScalar(u8, path, '.') orelse {
+        std.log.err("[upnpOpenCallback] asset path malformed", .{});
+        return null;
+    };
+    const id = path[(startIndex + 1)..endIndex];
+
+    std.log.info("[upnpOpenCallback] Asset ID: {s}", .{id});
+
+    const asset = ctx.immichClient.getAsset(id) catch {
+        std.log.err("[upnpOpenCallback] asset not found", .{});
+        return null;
+    };
+    defer asset.deinit();
+
+    std.log.debug("[upnpOpenCallback] found asset", .{});
+
+    const filePath = asset.value.originalPath orelse {
+        std.log.err("[upnpOpenCallback] asset path not found", .{});
+        return null;
+    };
+
+    const file = std.fs.openFileAbsolute(filePath, .{}) catch |err| {
+        std.log.err("[upnpOpenCallback] failed to open file: {}", .{err});
+        return null;
+    };
+
+    const handle = ctx.allocator.create(UpnpVirtualHandle) catch {
+        std.log.err("[upnpOpenCallback] failed to create virtual handle", .{});
+        return null;
+    };
+    handle.file = file;
+
+    std.log.debug("[upnpOpenCallback] handle created", .{});
+
+    return handle;
+}
+
+fn upnpSeekCallback(_handle: ?*anyopaque, offset: c_long, origin: c_int, cookie: ?*const anyopaque, requestCookie: ?*const anyopaque) callconv(.c) c_int {
+    _ = cookie;
+    _ = requestCookie;
+
+    const handle: *UpnpVirtualHandle = @ptrCast(@alignCast(@constCast(_handle)));
+
+    std.log.debug("[upnpSeekCallback] starting to seek", .{});
+
+    switch (origin) {
+        c.SEEK_CUR => {
+            handle.file.seekBy(offset) catch {
+                std.log.err("[upnpSeekCallback] failed to seek", .{});
+                return -1;
+            };
+        },
+        c.SEEK_END => {
+            handle.file.seekFromEnd(offset) catch {
+                std.log.err("[upnpSeekCallback] failed to seek", .{});
+                return -1;
+            };
+        },
+        c.SEEK_SET => {
+            handle.file.seekTo(@intCast(offset)) catch {
+                std.log.err("[upnpSeekCallback] failed to seek", .{});
+                return -1;
+            };
+        },
+        else => {
+            std.log.err("[upnpSeekCallback] invalid seek origin", .{});
+            return -1;
+        },
+    }
+
+    std.log.debug("[upnpSeekCallback] finished seeking", .{});
+
+    return 0;
+}
+
+fn upnpReadCallback(_handle: ?*anyopaque, buf: [*c]u8, len: usize, cookie: ?*const anyopaque, requestCookie: ?*const anyopaque) callconv(.c) c_int {
+    _ = cookie;
+    _ = requestCookie;
+
+    const handle: *UpnpVirtualHandle = @ptrCast(@alignCast(@constCast(_handle)));
+
+    std.log.debug("[upnpReadCallback] starting to read", .{});
+
+    const slice: []u8 = buf[0..len];
+    const bytesRead = handle.file.read(slice) catch {
+        std.log.err("[upnpReadCallback] failed to read file into buffer", .{});
+        return 0;
+    };
+
+    std.log.debug("[upnpReadCallback] read {} bytes", .{bytesRead});
+
+    return @intCast(bytesRead);
+}
+
+fn upnpCloseCallback(_handle: ?*anyopaque, cookie: ?*const anyopaque, requestCookie: ?*const anyopaque) callconv(.c) c_int {
+    _ = requestCookie;
+
+    const ctx: *UpnpCallbackContext = @ptrCast(@alignCast(@constCast(cookie)));
+
+    const handle: *UpnpVirtualHandle = @ptrCast(@alignCast(@constCast(_handle)));
+    handle.file.close();
+
+    ctx.allocator.destroy(handle);
+
+    std.log.debug("[upnpCloseCallback] closed file", .{});
+
+    return 0;
+}
 
 fn upnpCallback(
     event_type: c.Upnp_EventType,
@@ -101,10 +284,6 @@ fn upnpCallback(
                         request.setActionResult(doc);
                     },
                 },
-            }
-
-            if (std.mem.eql(u8, request.serviceId, "urn:upnp-org:serviceId:ContentDirectory")) {
-                if (std.mem.eql(u8, request.actionName, "Browse")) {}
             }
         },
         else => {
@@ -298,7 +477,10 @@ const Asset = struct {
         _ = c.ixmlElement_setAttribute(resElement, "protocolInfo", std.fmt.bufPrintZ(&buf, "http-get:*:{s}:*", .{self.mimeType}) catch "");
         _ = c.ixmlElement_setAttribute(resElement, "resolution", std.fmt.bufPrintZ(&buf, "{d}x{d}", .{ self.width, self.height }) catch "");
         _ = c.ixmlElement_setAttribute(resElement, "size", std.fmt.bufPrintZ(&buf, "{d}", .{self.size}) catch "");
-        const resText = c.ixmlDocument_createTextNode(document, "http://192.168.0.11:8888/assets/img.jpg");
+
+        const extension = if (std.mem.eql(u8, self.mimeType, "image/jpeg")) ".jpeg" else "";
+
+        const resText = c.ixmlDocument_createTextNode(document, std.fmt.bufPrintZ(&buf, "http://192.168.0.11:8888/assets/{s}{s}", .{ self.id, extension }) catch "");
         _ = c.ixmlNode_appendChild(@ptrCast(resElement), @ptrCast(resText));
         _ = c.ixmlNode_appendChild(@ptrCast(assetElement), @ptrCast(resElement));
 
@@ -362,6 +544,14 @@ pub fn main() !void {
             "http://localhost:2283/api",
         ),
     };
+
+    _ = c.UpnpVirtualDir_set_GetInfoCallback(upnpGetInfoCallback);
+    _ = c.UpnpVirtualDir_set_OpenCallback(upnpOpenCallback);
+    _ = c.UpnpVirtualDir_set_SeekCallback(upnpSeekCallback);
+    _ = c.UpnpVirtualDir_set_ReadCallback(upnpReadCallback);
+    _ = c.UpnpVirtualDir_set_CloseCallback(upnpCloseCallback);
+
+    _ = c.UpnpAddVirtualDir("assets", &context, null);
 
     const rc = c.UpnpRegisterRootDevice2(
         c.UPNPREG_BUF_DESC,

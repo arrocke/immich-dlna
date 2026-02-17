@@ -1,11 +1,14 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const zeit = b.dependency("zeit", .{});
+
     const exe_mod = b.addModule("main", .{
         .root_source_file = b.path("src/main.zig"),
         .target = b.graph.host,
         .link_libc = true,
     });
+    exe_mod.addImport("zeit", zeit.module("zeit"));
     exe_mod.linkSystemLibrary("upnp", .{
         .use_pkg_config = .yes,
     });

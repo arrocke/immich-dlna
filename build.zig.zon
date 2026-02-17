@@ -1,0 +1,12 @@
+.{
+    .name = .immich_dlna,
+    .version = "0.15.2",
+    .dependencies = .{
+        .zeit = .{
+            .url = "git+https://github.com/rockorager/zeit?ref=v0.7.0#7ac64d72dbfb1a4ad549102e7d4e232a687d32d8",
+            .hash = "zeit-0.6.0-5I6bk36tAgATpSl9wjFmRPMqYN2Mn0JQHgIcRNcqDpJA",
+        },
+    },
+    .paths = .{""},
+    .fingerprint = 0xd6778d504b294b08,
+}
