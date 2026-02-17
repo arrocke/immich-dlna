@@ -13,9 +13,100 @@ const UpnpCallbackContext = struct {
 
 const UpnpFileCallbackContext = struct {};
 
-const UpnpVirtualHandle = struct {
-    file: std.fs.File,
+const UpnpVirtualHandle = union(enum) {
+    file: struct {
+        file: std.fs.File,
+    },
+    slice: struct {
+        slice: []const u8,
+        pos: usize,
+    },
+
+    fn close(self: *UpnpVirtualHandle) void {
+        switch (self.*) {
+            .file => |fileHandle| {
+                fileHandle.file.close();
+            },
+            .slice => {},
+        }
+    }
+
+    fn read(self: *UpnpVirtualHandle, buf: []u8) !usize {
+        switch (self.*) {
+            .file => |fileHandle| {
+                return try fileHandle.file.read(buf);
+            },
+            .slice => |*sliceHandle| {
+                if (sliceHandle.pos >= sliceHandle.slice.len) {
+                    return 0;
+                }
+
+                const bytesRead = @max(buf.len, sliceHandle.slice.len - sliceHandle.pos);
+                @memcpy(buf, sliceHandle.slice[sliceHandle.pos..(sliceHandle.pos + bytesRead)]);
+                sliceHandle.pos += bytesRead;
+                return bytesRead;
+            },
+        }
+    }
+
+    fn seekBy(self: *UpnpVirtualHandle, offset: i64) !void {
+        switch (self.*) {
+            .file => |fileHandle| {
+                return try fileHandle.file.seekBy(offset);
+            },
+            .slice => |*sliceHandle| {
+                const newPos = sliceHandle.pos + @as(usize, @intCast(offset));
+                if (newPos < 0) {
+                    return std.fs.File.SeekError.Unseekable;
+                } else if (newPos > sliceHandle.slice.len) {
+                    return std.fs.File.SeekError.Unseekable;
+                }
+
+                sliceHandle.pos = newPos;
+                return;
+            },
+        }
+    }
+
+    fn seekTo(self: *UpnpVirtualHandle, offset: u64) !void {
+        switch (self.*) {
+            .file => |fileHandle| {
+                return try fileHandle.file.seekTo(offset);
+            },
+            .slice => |*sliceHandle| {
+                if (offset > sliceHandle.slice.len) {
+                    return std.fs.File.SeekError.Unseekable;
+                }
+
+                sliceHandle.pos = offset;
+                return;
+            },
+        }
+    }
+
+    fn seekFromEnd(self: *UpnpVirtualHandle, offset: i64) !void {
+        switch (self.*) {
+            .file => |fileHandle| {
+                return try fileHandle.file.seekFromEnd(offset);
+            },
+            .slice => |*sliceHandle| {
+                const newPos = sliceHandle.slice.len + @as(usize, @intCast(offset));
+                if (newPos < 0) {
+                    return std.fs.File.SeekError.Unseekable;
+                } else if (newPos > sliceHandle.slice.len) {
+                    return std.fs.File.SeekError.Unseekable;
+                }
+
+                sliceHandle.pos = newPos;
+                return;
+            },
+        }
+    }
 };
+
+const deviceXml = @embedFile("device.xml");
+const contentDirectoryXml: []const u8 = @embedFile("contentDirectory.xml");
+const connectionManagerXml: []const u8 = @embedFile("connectionManager.xml");
 
 fn upnpGetInfoCallback(pathCstr: [*c]const u8, fileInfo: ?*c.UpnpFileInfo, cookie: ?*const anyopaque, requestCookie: [*c]?*const anyopaque) callconv(.c) c_int {
     _ = requestCookie;
@@ -23,51 +114,65 @@ fn upnpGetInfoCallback(pathCstr: [*c]const u8, fileInfo: ?*c.UpnpFileInfo, cooki
 
     const path = std.mem.span(pathCstr);
 
-    const startIndex = std.mem.lastIndexOfScalar(u8, path, '/') orelse {
-        std.log.err("[upnpGetInfoCallback] asset path malformed", .{});
-        return -1;
-    };
-    const endIndex = std.mem.lastIndexOfScalar(u8, path, '.') orelse {
-        std.log.err("[upnpGetInfoCallback] asset path malformed", .{});
-        return -1;
-    };
-    const id = path[(startIndex + 1)..endIndex];
-
-    std.log.info("[upnpGetInfoCallback] Asset ID: {s}", .{id});
-
-    const asset = ctx.immichClient.getAsset(id) catch {
-        std.log.err("[upnpGetInfoCallback] asset not found", .{});
-        return -1;
-    };
-    defer asset.deinit();
-
-    std.log.debug("[upnpGetInfoCallback] found asset", .{});
-
-    _ = c.UpnpFileInfo_set_FileLength(fileInfo, asset.value.exifInfo.fileSizeInByte);
-    if (asset.value.originalMimeType) |mimeType| {
-        const cstr = ctx.allocator.dupeZ(u8, mimeType) catch {
-            std.log.err("[upnpGetInfoCallback] failed to create mime type", .{});
+    if (std.mem.eql(u8, path, "/scpd/ContentDirectory.xml")) {
+        _ = c.UpnpFileInfo_set_FileLength(fileInfo, contentDirectoryXml.len);
+        _ = c.UpnpFileInfo_set_ContentType(fileInfo, "text/xml");
+        _ = c.UpnpFileInfo_set_IsReadable(fileInfo, 1);
+        _ = c.UpnpFileInfo_set_IsDirectory(fileInfo, 0);
+        _ = c.UpnpFileInfo_set_LastModified(fileInfo, std.time.timestamp());
+    } else if (std.mem.eql(u8, path, "/scpd/ConnectionManager.xml")) {
+        _ = c.UpnpFileInfo_set_FileLength(fileInfo, connectionManagerXml.len);
+        _ = c.UpnpFileInfo_set_ContentType(fileInfo, "text/xml");
+        _ = c.UpnpFileInfo_set_IsReadable(fileInfo, 1);
+        _ = c.UpnpFileInfo_set_IsDirectory(fileInfo, 0);
+        _ = c.UpnpFileInfo_set_LastModified(fileInfo, std.time.timestamp());
+    } else if (std.mem.startsWith(u8, path, "/assets/")) {
+        const startIndex = std.mem.lastIndexOfScalar(u8, path, '/') orelse {
+            std.log.err("[upnpGetInfoCallback] asset path malformed", .{});
             return -1;
         };
-        defer ctx.allocator.free(cstr);
+        const endIndex = std.mem.lastIndexOfScalar(u8, path, '.') orelse {
+            std.log.err("[upnpGetInfoCallback] asset path malformed", .{});
+            return -1;
+        };
+        const id = path[(startIndex + 1)..endIndex];
 
-        std.log.debug("[upnpGetInfoCallback] parsed mime type", .{});
+        std.log.info("[upnpGetInfoCallback] Asset ID: {s}", .{id});
 
-        _ = c.UpnpFileInfo_set_ContentType(fileInfo, cstr);
+        const asset = ctx.immichClient.getAsset(id) catch {
+            std.log.err("[upnpGetInfoCallback] asset not found", .{});
+            return -1;
+        };
+        defer asset.deinit();
+
+        std.log.debug("[upnpGetInfoCallback] found asset", .{});
+
+        _ = c.UpnpFileInfo_set_FileLength(fileInfo, asset.value.exifInfo.fileSizeInByte);
+        if (asset.value.originalMimeType) |mimeType| {
+            const cstr = ctx.allocator.dupeZ(u8, mimeType) catch {
+                std.log.err("[upnpGetInfoCallback] failed to create mime type", .{});
+                return -1;
+            };
+            defer ctx.allocator.free(cstr);
+
+            std.log.debug("[upnpGetInfoCallback] parsed mime type", .{});
+
+            _ = c.UpnpFileInfo_set_ContentType(fileInfo, cstr);
+        }
+        _ = c.UpnpFileInfo_set_IsReadable(fileInfo, 1);
+        _ = c.UpnpFileInfo_set_IsDirectory(fileInfo, 0);
+
+        const updatedAt = zeit.instant(.{
+            .source = .{
+                .iso8601 = asset.value.updatedAt,
+            },
+        }) catch {
+            std.log.err("[upnpGetInfoCallback] failed to parse updated at date", .{});
+            return -1;
+        };
+        std.log.debug("[upnpGetInfoCallback] parsed updated date", .{});
+        _ = c.UpnpFileInfo_set_LastModified(fileInfo, updatedAt.unixTimestamp());
     }
-    _ = c.UpnpFileInfo_set_IsReadable(fileInfo, 1);
-    _ = c.UpnpFileInfo_set_IsDirectory(fileInfo, 0);
-
-    const updatedAt = zeit.instant(.{
-        .source = .{
-            .iso8601 = asset.value.updatedAt,
-        },
-    }) catch {
-        std.log.err("[upnpGetInfoCallback] failed to parse updated at date", .{});
-        return -1;
-    };
-    std.log.debug("[upnpGetInfoCallback] parsed updated date", .{});
-    _ = c.UpnpFileInfo_set_LastModified(fileInfo, updatedAt.unixTimestamp());
 
     return 0;
 }
@@ -80,45 +185,79 @@ fn upnpOpenCallback(pathCstr: [*c]const u8, fileMode: c.enum_UpnpOpenFileMode, c
 
     const path = std.mem.span(pathCstr);
 
-    const startIndex = std.mem.lastIndexOfScalar(u8, path, '/') orelse {
-        std.log.err("[upnpOpenCallback] asset path malformed", .{});
-        return null;
-    };
-    const endIndex = std.mem.lastIndexOfScalar(u8, path, '.') orelse {
-        std.log.err("[upnpOpenCallback] asset path malformed", .{});
-        return null;
-    };
-    const id = path[(startIndex + 1)..endIndex];
+    if (std.mem.eql(u8, path, "/scpd/ContentDirectory.xml")) {
+        const handle = ctx.allocator.create(UpnpVirtualHandle) catch {
+            std.log.err("[upnpOpenCallback] failed to create virtual handle", .{});
+            return null;
+        };
+        handle.* = .{
+            .slice = .{
+                .slice = contentDirectoryXml,
+                .pos = 0,
+            },
+        };
 
-    std.log.info("[upnpOpenCallback] Asset ID: {s}", .{id});
+        std.log.debug("[upnpOpenCallback] handle created", .{});
 
-    const asset = ctx.immichClient.getAsset(id) catch {
-        std.log.err("[upnpOpenCallback] asset not found", .{});
-        return null;
-    };
-    defer asset.deinit();
+        return handle;
+    } else if (std.mem.eql(u8, path, "/scpd/ConnectionManager.xml")) {
+        const handle = ctx.allocator.create(UpnpVirtualHandle) catch {
+            std.log.err("[upnpOpenCallback] failed to create virtual handle", .{});
+            return null;
+        };
+        handle.* = .{
+            .slice = .{
+                .slice = connectionManagerXml,
+                .pos = 0,
+            },
+        };
 
-    std.log.debug("[upnpOpenCallback] found asset", .{});
+        std.log.debug("[upnpOpenCallback] handle created", .{});
 
-    const filePath = asset.value.originalPath orelse {
-        std.log.err("[upnpOpenCallback] asset path not found", .{});
-        return null;
-    };
+        return handle;
+    } else if (std.mem.startsWith(u8, path, "/assets/")) {
+        const startIndex = std.mem.lastIndexOfScalar(u8, path, '/') orelse {
+            std.log.err("[upnpOpenCallback] asset path malformed", .{});
+            return null;
+        };
+        const endIndex = std.mem.lastIndexOfScalar(u8, path, '.') orelse {
+            std.log.err("[upnpOpenCallback] asset path malformed", .{});
+            return null;
+        };
+        const id = path[(startIndex + 1)..endIndex];
 
-    const file = std.fs.openFileAbsolute(filePath, .{}) catch |err| {
-        std.log.err("[upnpOpenCallback] failed to open file: {}", .{err});
-        return null;
-    };
+        std.log.info("[upnpOpenCallback] Asset ID: {s}", .{id});
 
-    const handle = ctx.allocator.create(UpnpVirtualHandle) catch {
-        std.log.err("[upnpOpenCallback] failed to create virtual handle", .{});
-        return null;
-    };
-    handle.file = file;
+        const asset = ctx.immichClient.getAsset(id) catch {
+            std.log.err("[upnpOpenCallback] asset not found", .{});
+            return null;
+        };
+        defer asset.deinit();
 
-    std.log.debug("[upnpOpenCallback] handle created", .{});
+        std.log.debug("[upnpOpenCallback] found asset", .{});
 
-    return handle;
+        const filePath = asset.value.originalPath orelse {
+            std.log.err("[upnpOpenCallback] asset path not found", .{});
+            return null;
+        };
+
+        const file = std.fs.openFileAbsolute(filePath, .{}) catch |err| {
+            std.log.err("[upnpOpenCallback] failed to open file: {}", .{err});
+            return null;
+        };
+
+        const handle = ctx.allocator.create(UpnpVirtualHandle) catch {
+            std.log.err("[upnpOpenCallback] failed to create virtual handle", .{});
+            return null;
+        };
+        handle.* = .{ .file = .{ .file = file } };
+
+        std.log.debug("[upnpOpenCallback] handle created", .{});
+
+        return handle;
+    }
+
+    return null;
 }
 
 fn upnpSeekCallback(_handle: ?*anyopaque, offset: c_long, origin: c_int, cookie: ?*const anyopaque, requestCookie: ?*const anyopaque) callconv(.c) c_int {
@@ -131,19 +270,19 @@ fn upnpSeekCallback(_handle: ?*anyopaque, offset: c_long, origin: c_int, cookie:
 
     switch (origin) {
         c.SEEK_CUR => {
-            handle.file.seekBy(offset) catch {
+            handle.seekBy(offset) catch {
                 std.log.err("[upnpSeekCallback] failed to seek", .{});
                 return -1;
             };
         },
         c.SEEK_END => {
-            handle.file.seekFromEnd(offset) catch {
+            handle.seekFromEnd(offset) catch {
                 std.log.err("[upnpSeekCallback] failed to seek", .{});
                 return -1;
             };
         },
         c.SEEK_SET => {
-            handle.file.seekTo(@intCast(offset)) catch {
+            handle.seekTo(@intCast(offset)) catch {
                 std.log.err("[upnpSeekCallback] failed to seek", .{});
                 return -1;
             };
@@ -168,7 +307,7 @@ fn upnpReadCallback(_handle: ?*anyopaque, buf: [*c]u8, len: usize, cookie: ?*con
     std.log.debug("[upnpReadCallback] starting to read", .{});
 
     const slice: []u8 = buf[0..len];
-    const bytesRead = handle.file.read(slice) catch {
+    const bytesRead = handle.read(slice) catch {
         std.log.err("[upnpReadCallback] failed to read file into buffer", .{});
         return 0;
     };
@@ -184,7 +323,7 @@ fn upnpCloseCallback(_handle: ?*anyopaque, cookie: ?*const anyopaque, requestCoo
     const ctx: *UpnpCallbackContext = @ptrCast(@alignCast(@constCast(cookie)));
 
     const handle: *UpnpVirtualHandle = @ptrCast(@alignCast(@constCast(_handle)));
-    handle.file.close();
+    handle.close();
 
     ctx.allocator.destroy(handle);
 
@@ -513,8 +652,6 @@ const Album = struct {
     }
 };
 
-const deviceXml = @embedFile("device.xml");
-
 pub fn main() !void {
     const port: c.ushort = 8888; // auto-select port
     const ip_address: ?[*:0]const u8 = null;
@@ -552,6 +689,7 @@ pub fn main() !void {
     _ = c.UpnpVirtualDir_set_CloseCallback(upnpCloseCallback);
 
     _ = c.UpnpAddVirtualDir("assets", &context, null);
+    _ = c.UpnpAddVirtualDir("scpd", &context, null);
 
     const rc = c.UpnpRegisterRootDevice2(
         c.UPNPREG_BUF_DESC,
