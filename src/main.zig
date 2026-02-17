@@ -659,6 +659,13 @@ const Album = struct {
     }
 };
 
+var shutdown_requested = std.atomic.Value(bool).init(false);
+
+fn handleSignal(sig: c_int) callconv(.c) void {
+    _ = sig;
+    shutdown_requested.store(true, .seq_cst);
+}
+
 pub fn main() !void {
     const port: c.ushort = 8888; // auto-select port
     const ip_address: ?[*:0]const u8 = null;
@@ -705,13 +712,23 @@ pub fn main() !void {
 
     std.log.debug("[main] Root device registered", .{});
 
-    // Advertise every 60 seconds
     _ = c.UpnpSendAdvertisement(handle, 60);
 
     std.log.debug("[main] Advertisements sent", .{});
 
-    // Keep process alive
-    std.Thread.sleep(300 * std.time.ns_per_s);
+    var act = std.posix.Sigaction{
+        .handler = .{ .handler = handleSignal },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(std.posix.SIG.INT, &act, null);
+    std.posix.sigaction(std.posix.SIG.TERM, &act, null);
+
+    while (!shutdown_requested.load(.seq_cst)) {
+        std.Thread.sleep(1 * std.time.ns_per_s);
+    }
+
+    std.log.debug("[main] Shutting down", .{});
 
     _ = c.UpnpUnRegisterRootDevice(handle);
     _ = c.UpnpFinish();
