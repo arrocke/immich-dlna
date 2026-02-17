@@ -74,8 +74,9 @@ fn upnpCallback(
                                         std.log.err("[upnpCallback] Failed to allocate memory", .{});
                                         return 0;
                                     },
-                                    .width = 0,
-                                    .height = 0,
+                                    .width = asset.exifInfo.exifImageWidth,
+                                    .height = asset.exifInfo.exifImageHeight,
+                                    .size = asset.exifInfo.fileSizeInByte,
                                     .mimeType = ctx.allocator.dupeZ(u8, asset.originalMimeType orelse "") catch {
                                         std.log.err("[upnpCallback] Failed to allocate memory", .{});
                                         return 0;
@@ -92,8 +93,6 @@ fn upnpCallback(
                                 std.log.err("[upnpCallback] Failed to allocate memory", .{});
                                 return 0;
                             },
-                            .totalMatches = "1",
-                            .numberReturned = "1",
                             .updateId = "1",
                         };
 
@@ -204,8 +203,6 @@ const BrowseReponse = struct {
 
     resources: []const Resource,
     updateId: [:0]const u8,
-    numberReturned: [:0]const u8,
-    totalMatches: [:0]const u8,
 
     pub fn toIXMLDocument(self: *const BrowseReponse) [*c]c.struct__IXML_Document {
         const didlDocument = c.ixmlDocument_createDocument();
@@ -243,16 +240,19 @@ const BrowseReponse = struct {
             _ = c.ixmlNode_appendChild(@ptrCast(browseResponseElement), @ptrCast(element));
         }
 
+        var buf: [1024]u8 = undefined;
+        const countStr = std.fmt.bufPrintZ(&buf, "{d}", .{self.resources.len}) catch "";
+
         {
             const element = c.ixmlDocument_createElement(document, "NumberReturned");
-            const text = c.ixmlDocument_createTextNode(document, self.numberReturned);
+            const text = c.ixmlDocument_createTextNode(document, countStr);
             _ = c.ixmlNode_appendChild(@ptrCast(element), @ptrCast(text));
             _ = c.ixmlNode_appendChild(@ptrCast(browseResponseElement), @ptrCast(element));
         }
 
         {
             const element = c.ixmlDocument_createElement(document, "TotalMatches");
-            const text = c.ixmlDocument_createTextNode(document, self.totalMatches);
+            const text = c.ixmlDocument_createTextNode(document, countStr);
             _ = c.ixmlNode_appendChild(@ptrCast(element), @ptrCast(text));
             _ = c.ixmlNode_appendChild(@ptrCast(browseResponseElement), @ptrCast(element));
         }
@@ -275,33 +275,34 @@ const Asset = struct {
     mimeType: [:0]const u8,
     width: u32,
     height: u32,
+    size: u32,
 
     pub fn toIXMLElement(self: *const Asset, document: *c.struct__IXML_Document) [*c]c.struct__IXML_Element {
-        const albumElement = c.ixmlDocument_createElement(document, "item");
-        _ = c.ixmlElement_setAttribute(albumElement, "id", self.id);
-        _ = c.ixmlElement_setAttribute(albumElement, "parentID", self.parentId);
-        _ = c.ixmlElement_setAttribute(albumElement, "restricted", "1");
+        const assetElement = c.ixmlDocument_createElement(document, "item");
+        _ = c.ixmlElement_setAttribute(assetElement, "id", self.id);
+        _ = c.ixmlElement_setAttribute(assetElement, "parentID", self.parentId);
+        _ = c.ixmlElement_setAttribute(assetElement, "restricted", "1");
 
         const titleElement = c.ixmlDocument_createElement(document, "dc:title");
         const titleText = c.ixmlDocument_createTextNode(document, self.name);
         _ = c.ixmlNode_appendChild(@ptrCast(titleElement), @ptrCast(titleText));
-        _ = c.ixmlNode_appendChild(@ptrCast(albumElement), @ptrCast(titleElement));
+        _ = c.ixmlNode_appendChild(@ptrCast(assetElement), @ptrCast(titleElement));
 
         const classElement = c.ixmlDocument_createElement(document, "upnp:class");
         const classText = c.ixmlDocument_createTextNode(document, "object.item.imageItem.photo");
         _ = c.ixmlNode_appendChild(@ptrCast(classElement), @ptrCast(classText));
-        _ = c.ixmlNode_appendChild(@ptrCast(albumElement), @ptrCast(classElement));
+        _ = c.ixmlNode_appendChild(@ptrCast(assetElement), @ptrCast(classElement));
 
         const resElement = c.ixmlDocument_createElement(document, "res");
         var buf: [1024]u8 = undefined;
-        _ = c.ixmlElement_setAttribute(albumElement, "protocolInfo", std.fmt.bufPrintZ(&buf, "http-get:*:{s}:DLNA.ORG_OP=01;DLNA.ORG_CI=0", .{self.mimeType}) catch "");
-        _ = c.ixmlElement_setAttribute(albumElement, "resolution", std.fmt.bufPrintZ(&buf, "{d}x{d}", .{ self.width, self.height }) catch "");
-        _ = c.ixmlElement_setAttribute(albumElement, "size", std.fmt.bufPrintZ(&buf, "{d}", .{0}) catch "");
-        const resText = c.ixmlDocument_createTextNode(document, "https://picsum.photos/200/300");
+        _ = c.ixmlElement_setAttribute(resElement, "protocolInfo", std.fmt.bufPrintZ(&buf, "http-get:*:{s}:*", .{self.mimeType}) catch "");
+        _ = c.ixmlElement_setAttribute(resElement, "resolution", std.fmt.bufPrintZ(&buf, "{d}x{d}", .{ self.width, self.height }) catch "");
+        _ = c.ixmlElement_setAttribute(resElement, "size", std.fmt.bufPrintZ(&buf, "{d}", .{self.size}) catch "");
+        const resText = c.ixmlDocument_createTextNode(document, "http://192.168.0.11:8888/assets/img.jpg");
         _ = c.ixmlNode_appendChild(@ptrCast(resElement), @ptrCast(resText));
-        _ = c.ixmlNode_appendChild(@ptrCast(albumElement), @ptrCast(resElement));
+        _ = c.ixmlNode_appendChild(@ptrCast(assetElement), @ptrCast(resElement));
 
-        return albumElement;
+        return assetElement;
     }
 };
 

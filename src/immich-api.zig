@@ -80,6 +80,13 @@ pub const Album = struct {
 };
 
 pub const Asset = struct {
+    const EixfInfo = struct {
+        exifImageHeight: u32,
+        exifImageWidth: u32,
+        fileSizeInByte: u32,
+    };
+
     id: []u8,
     originalMimeType: ?[]u8,
+    exifInfo: EixfInfo,
 };
