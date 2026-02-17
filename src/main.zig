@@ -3,10 +3,6 @@ const Context = @import("context.zig");
 const Device = @import("device.zig");
 const virtual_fs = @import("virtual_fs.zig");
 
-const c = @cImport({
-    @cInclude("upnp/upnp.h");
-});
-
 var shutdown_requested = std.atomic.Value(bool).init(false);
 
 fn handleSignal(sig: c_int) callconv(.c) void {
@@ -15,7 +11,7 @@ fn handleSignal(sig: c_int) callconv(.c) void {
 }
 
 pub fn main() !void {
-    const port: c.ushort = 8888;
+    const port: u16 = 8888;
     const ip_address: ?[*:0]const u8 = null;
 
     const allocator = std.heap.c_allocator;
