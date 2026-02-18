@@ -1,5 +1,4 @@
 const std = @import("std");
-const ImmichApi = @import("./immich-api.zig");
 const virtual_fs = @import("./virtual_fs.zig");
 const Context = @import("context.zig");
 
@@ -78,11 +77,9 @@ fn eventCallback(
             switch (request.service) {
                 .contentDirectory => |serviceAction| switch (serviceAction) {
                     .browse => |action| {
-                        var immichClient = ImmichApi.init(ctx.allocator, ctx.immichApiKey, ctx.immichBaseUrl);
-
                         var resources: std.ArrayList(BrowseReponse.Resource) = .{};
                         if (std.mem.eql(u8, action.objectId, "0")) {
-                            const albums = immichClient.getAlbums() catch |err| {
+                            const albums = ctx.immichClient.getAlbums() catch |err| {
                                 std.log.err("[device.eventCallback] Failed to fetch albums {}", .{err});
                                 return 0;
                             };
@@ -105,7 +102,7 @@ fn eventCallback(
                                 };
                             }
                         } else {
-                            const album = immichClient.getAlbum(action.objectId) catch |err| {
+                            var album = ctx.immichClient.getAlbum(action.objectId) catch |err| {
                                 std.log.err("[device.eventCallback] Failed to fetch albums {}", .{err});
                                 return 0;
                             };

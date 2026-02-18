@@ -1,6 +1,5 @@
 const std = @import("std");
 const zeit = @import("zeit");
-const ImmichApi = @import("./immich-api.zig");
 const Context = @import("context.zig");
 
 const c = @cImport({
@@ -131,8 +130,6 @@ fn getInfoCallback(pathCstr: [*c]const u8, fileInfo: ?*c.UpnpFileInfo, cookie: ?
         _ = c.UpnpFileInfo_set_IsDirectory(fileInfo, 0);
         _ = c.UpnpFileInfo_set_LastModified(fileInfo, std.time.timestamp());
     } else if (std.mem.startsWith(u8, path, "/assets/")) {
-        var immichClient = ImmichApi.init(ctx.allocator, ctx.immichApiKey, ctx.immichBaseUrl);
-
         const startIndex = std.mem.lastIndexOfScalar(u8, path, '/') orelse {
             std.log.err("[virtual_fs.getInfoCallback] asset path malformed", .{});
             return -1;
@@ -145,7 +142,7 @@ fn getInfoCallback(pathCstr: [*c]const u8, fileInfo: ?*c.UpnpFileInfo, cookie: ?
 
         std.log.info("[virtual_fs.getInfoCallback] Asset ID: {s}", .{id});
 
-        const asset = immichClient.getAsset(id) catch {
+        var asset = ctx.immichClient.getAsset(id) catch {
             std.log.err("[virtual_fs.getInfoCallback] asset not found", .{});
             return -1;
         };
@@ -222,8 +219,6 @@ fn openCallback(pathCstr: [*c]const u8, fileMode: c.enum_UpnpOpenFileMode, cooki
 
         return handle;
     } else if (std.mem.startsWith(u8, path, "/assets/")) {
-        var immichClient = ImmichApi.init(ctx.allocator, ctx.immichApiKey, ctx.immichBaseUrl);
-
         const startIndex = std.mem.lastIndexOfScalar(u8, path, '/') orelse {
             std.log.err("[virtual_fs.openCallback] asset path malformed", .{});
             return null;
@@ -236,7 +231,7 @@ fn openCallback(pathCstr: [*c]const u8, fileMode: c.enum_UpnpOpenFileMode, cooki
 
         std.log.info("[virtual_fs.openCallback] Asset ID: {s}", .{id});
 
-        const asset = immichClient.getAsset(id) catch {
+        var asset = ctx.immichClient.getAsset(id) catch {
             std.log.err("[virtual_fs.openCallback] asset not found", .{});
             return null;
         };

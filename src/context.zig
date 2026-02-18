@@ -1,7 +1,7 @@
 const std = @import("std");
+const ImmichApi = @import("./immich-api.zig");
 
 const Self = @This();
 
 allocator: std.mem.Allocator,
-immichBaseUrl: []const u8,
-immichApiKey: []const u8,
+immichClient: ImmichApi,
