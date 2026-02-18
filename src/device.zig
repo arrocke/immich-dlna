@@ -79,7 +79,7 @@ fn eventCallback(
                     .browse => |action| {
                         var resources: std.ArrayList(BrowseReponse.Resource) = .{};
                         if (std.mem.eql(u8, action.objectId, "0")) {
-                            var albums = ctx.immichClient.getAlbums() catch |err| {
+                            var albums = ctx.immichStore.getAlbums() catch |err| {
                                 std.log.err("[device.eventCallback] Failed to fetch albums {}", .{err});
                                 return 0;
                             };
@@ -102,7 +102,7 @@ fn eventCallback(
                                 };
                             }
                         } else {
-                            var album = ctx.immichClient.getAlbum(action.objectId) catch |err| {
+                            var album = ctx.immichStore.getAlbum(action.objectId) catch |err| {
                                 std.log.err("[device.eventCallback] Failed to fetch albums {}", .{err});
                                 return 0;
                             };

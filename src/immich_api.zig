@@ -54,161 +54,52 @@ pub const Asset = struct {
     }
 };
 
-pub fn LockedResource(T: type) type {
-    return struct {
-        value: T,
-        lock: *std.Thread.RwLock,
-
-        pub fn deinit(self: *LockedResource(T)) void {
-            self.lock.unlockShared();
-        }
-    };
-}
-
-apiKey: []const u8,
-baseUrl: []const u8,
-allocator: std.mem.Allocator,
-
-albumsCache: ?[]const Album,
-albumCache: std.hash_map.StringHashMap(Album),
-assetCache: std.hash_map.StringHashMap(Asset),
-cacheLock: std.Thread.RwLock,
-
-pub fn init(allocator: std.mem.Allocator, apiKey: []const u8, baseUrl: []const u8) Self {
-    return .{
-        .apiKey = apiKey,
-        .baseUrl = baseUrl,
-        .allocator = allocator,
-
-        .albumsCache = null,
-        .albumCache = std.hash_map.StringHashMap(Album).init(allocator),
-        .assetCache = std.hash_map.StringHashMap(Asset).init(allocator),
-        .cacheLock = std.Thread.RwLock{},
-    };
-}
-
-pub fn deinit(self: *Self) void {
-    self.client.deinit();
-    self.albumCache.deinit();
-    self.assetCache.deinit();
-}
-
 const GetRequestError = error{
     HttpRequestFailed,
     OutOfMemory,
     FailedStatusCode,
 };
 
-pub fn getAlbums(self: *Self) !LockedResource([]const Album) {
-    self.cacheLock.lockShared();
+apiKey: []const u8,
+baseUrl: []const u8,
+allocator: std.mem.Allocator,
 
-    if (self.albumsCache) |cache| {
-        std.log.info("[ImmichApi.getAlbums] cache hit", .{});
-        return LockedResource([]const Album){
-            .value = cache,
-            .lock = &self.cacheLock,
-        };
-    }
-
-    std.log.info("[ImmichApi.getAlbums] cache miss", .{});
-
-    self.cacheLock.unlockShared();
-
-    const parsedAlbums = self.get([]Album, "/albums", .{}) catch |err| {
-        self.cacheLock.unlock();
-        return err;
+pub fn init(allocator: std.mem.Allocator, apiKey: []const u8, baseUrl: []const u8) Self {
+    return .{
+        .apiKey = apiKey,
+        .baseUrl = baseUrl,
+        .allocator = allocator,
     };
+}
+
+pub fn deinit(self: *Self) void {
+    _ = self;
+}
+
+pub fn getAlbums(self: *Self) ![]const Album {
+    const parsedAlbums = try self.get([]Album, "/albums", .{});
     defer parsedAlbums.deinit();
 
-    var albums = std.ArrayList(Album).initCapacity(self.allocator, parsedAlbums.value.len) catch |err| {
-        self.cacheLock.unlock();
-        return err;
-    };
+    var albums = try std.ArrayList(Album).initCapacity(self.allocator, parsedAlbums.value.len);
     for (parsedAlbums.value) |album| {
         albums.appendAssumeCapacity(try album.clone(self.allocator));
     }
 
-    const albumsSlice = try albums.toOwnedSlice(self.allocator);
-    self.cacheLock.lock();
-    self.albumsCache = albumsSlice;
-    self.cacheLock.unlock();
-
-    self.cacheLock.lockShared();
-    return LockedResource([]const Album){
-        .value = self.albumsCache.?,
-        .lock = &self.cacheLock,
-    };
+    return try albums.toOwnedSlice(self.allocator);
 }
 
-pub fn getAlbum(self: *Self, id: []const u8) !LockedResource(*Album) {
-    self.cacheLock.lockShared();
+pub fn getAlbum(self: *Self, id: []const u8) !Album {
+    const parsedAlbum = try self.get(Album, "/albums/{s}", .{id});
+    defer parsedAlbum.deinit();
 
-    const entry = self.albumCache.getOrPut(id) catch |err| {
-        self.cacheLock.unlockShared();
-        return err;
-    };
-    if (entry.found_existing) {
-        std.log.info("[ImmichApi.getAlbum] cache hit: {s}", .{id});
-    } else {
-        self.cacheLock.unlockShared();
-
-        std.log.info("[ImmichApi.getAlbum] cache miss: {s}", .{id});
-        const parsedAlbum = try self.get(Album, "/albums/{s}", .{id});
-        defer parsedAlbum.deinit();
-
-        self.cacheLock.lock();
-        const album = parsedAlbum.value.clone(self.allocator) catch |err| {
-            self.cacheLock.unlock();
-            return err;
-        };
-        entry.value_ptr.* = album;
-        for (album.assets) |asset| {
-            self.assetCache.put(asset.id, asset) catch |err| {
-                self.cacheLock.unlock();
-                return err;
-            };
-        }
-        self.cacheLock.unlock();
-
-        self.cacheLock.lockShared();
-    }
-
-    return LockedResource(*Album){
-        .value = entry.value_ptr,
-        .lock = &self.cacheLock,
-    };
+    return try parsedAlbum.value.clone(self.allocator);
 }
 
-pub fn getAsset(self: *Self, id: []const u8) !LockedResource(*Asset) {
-    self.cacheLock.lockShared();
+pub fn getAsset(self: *Self, id: []const u8) !Asset {
+    const parsedAsset = try self.get(Asset, "/assets/{s}", .{id});
+    defer parsedAsset.deinit();
 
-    const entry = self.assetCache.getOrPut(id) catch |err| {
-        self.cacheLock.unlockShared();
-        return err;
-    };
-    if (entry.found_existing) {
-        std.log.info("[ImmichApi.getAsset] cache hit: {s}", .{id});
-    } else {
-        self.cacheLock.unlockShared();
-
-        std.log.info("[ImmichApi.getAsset] cache miss: {s}", .{id});
-        const parsedAsset = try self.get(Asset, "/assets/{s}", .{id});
-        defer parsedAsset.deinit();
-
-        self.cacheLock.lock();
-        entry.value_ptr.* = parsedAsset.value.clone(self.allocator) catch |err| {
-            self.cacheLock.unlock();
-            return err;
-        };
-        self.cacheLock.unlock();
-
-        self.cacheLock.lockShared();
-    }
-
-    return LockedResource(*Asset){
-        .value = entry.value_ptr,
-        .lock = &self.cacheLock,
-    };
+    return try parsedAsset.value.clone(self.allocator);
 }
 
 pub fn get(self: *Self, Response: type, comptime path: []const u8, pathArgs: anytype) GetRequestError!std.json.Parsed(Response) {
@@ -232,6 +123,7 @@ pub fn get(self: *Self, Response: type, comptime path: []const u8, pathArgs: any
     std.log.info("[ImmichApi.get] {s}", .{url});
 
     var client = std.http.Client{ .allocator = self.allocator };
+    defer client.deinit();
     const response = client.fetch(.{
         .location = .{ .url = url },
         .method = .GET,

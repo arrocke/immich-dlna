@@ -1,7 +1,7 @@
 const std = @import("std");
 const Context = @import("context.zig");
 const Device = @import("device.zig");
-const ImmichApi = @import("immich-api.zig");
+const ImmichStore = @import("immich_store.zig");
 const virtual_fs = @import("virtual_fs.zig");
 
 var shutdown_requested = std.atomic.Value(bool).init(false);
@@ -18,7 +18,7 @@ pub fn main() !void {
     const allocator = std.heap.c_allocator;
     const context = Context{
         .allocator = allocator,
-        .immichClient = ImmichApi.init(
+        .immichStore = ImmichStore.init(
             allocator,
             "rETcQbd3iHV5UseeCxfLRknNKDTkddSocw3ESZCqiyQ",
             "http://localhost:2283/api",
