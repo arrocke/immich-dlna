@@ -2,6 +2,8 @@ const std = @import("std");
 
 const Self = @This();
 
+const log = std.log.scoped(.ImmichApi);
+
 pub const Album = struct {
     id: []u8,
     albumName: []u8,
@@ -77,53 +79,70 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn getAlbums(self: *Self) ![]const Album {
+    errdefer |err| {
+        log.err("GET /albums failed: {}", .{err});
+    }
+
     const parsedAlbums = try self.get([]Album, "/albums", .{});
     defer parsedAlbums.deinit();
 
-    var albums = try std.ArrayList(Album).initCapacity(self.allocator, parsedAlbums.value.len);
-    for (parsedAlbums.value) |album| {
-        albums.appendAssumeCapacity(try album.clone(self.allocator));
+    const albums = try self.allocator.alloc(Album, parsedAlbums.value.len);
+    for (parsedAlbums.value, 0..) |album, i| {
+        albums[i] = try album.clone(self.allocator);
     }
 
-    return try albums.toOwnedSlice(self.allocator);
+    log.info("GET /albums", .{});
+
+    return albums;
 }
 
 pub fn getAlbum(self: *Self, id: []const u8) !Album {
+    errdefer |err| {
+        log.err("GET /albums/{s} failed: {}", .{ id, err });
+    }
+
     const parsedAlbum = try self.get(Album, "/albums/{s}", .{id});
     defer parsedAlbum.deinit();
 
-    return try parsedAlbum.value.clone(self.allocator);
+    const album = try parsedAlbum.value.clone(self.allocator);
+
+    log.info("GET /albums/{s}", .{id});
+
+    return album;
 }
 
 pub fn getAsset(self: *Self, id: []const u8) !Asset {
+    errdefer |err| {
+        log.err("GET /assets/{s} failed: {}", .{ id, err });
+    }
+
     const parsedAsset = try self.get(Asset, "/assets/{s}", .{id});
     defer parsedAsset.deinit();
 
-    return try parsedAsset.value.clone(self.allocator);
+    const asset = try parsedAsset.value.clone(self.allocator);
+
+    log.info("GET /assets/{s}", .{id});
+
+    return asset;
 }
 
 pub fn get(self: *Self, Response: type, comptime path: []const u8, pathArgs: anytype) GetRequestError!std.json.Parsed(Response) {
-    std.log.debug("[ImmichApi.get] Starting request for path: {s}", .{path});
+    errdefer |err| {
+        log.err("GET request failed: {}", .{err});
+    }
 
-    const fullPath = std.fmt.allocPrint(self.allocator, path, pathArgs) catch |err| {
-        std.log.err("[ImmichApi.get] Failed to format URL path: {}", .{err});
-        return err;
-    };
+    const fullPath = try std.fmt.allocPrint(self.allocator, path, pathArgs);
     defer self.allocator.free(fullPath);
 
-    const url = std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.baseUrl, fullPath }) catch |err| {
-        std.log.err("[ImmichApi.get] Failed to format URL: {}", .{err});
-        return err;
-    };
+    const url = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.baseUrl, fullPath });
     defer self.allocator.free(url);
 
     var body = std.Io.Writer.Allocating.init(self.allocator);
     defer body.deinit();
 
-    std.log.info("[ImmichApi.get] {s}", .{url});
-
     var client = std.http.Client{ .allocator = self.allocator };
     defer client.deinit();
+
     const response = client.fetch(.{
         .location = .{ .url = url },
         .method = .GET,
@@ -132,12 +151,12 @@ pub fn get(self: *Self, Response: type, comptime path: []const u8, pathArgs: any
         },
         .response_writer = &body.writer,
     }) catch |err| {
-        std.log.err("[ImmichApi.get] Get request failed: {}", .{err});
+        log.err("Failed to fetch: {}", .{err});
         return error.HttpRequestFailed;
     };
 
     if (response.status != .ok) {
-        std.log.err("[ImmichApi.get] Request failed with status: {}", .{response.status});
+        log.err("Error status code: {}", .{response.status});
         return error.FailedStatusCode;
     }
 
@@ -147,11 +166,9 @@ pub fn get(self: *Self, Response: type, comptime path: []const u8, pathArgs: any
         body.written(),
         .{ .ignore_unknown_fields = true },
     ) catch |err| {
-        std.log.err("[ImmichApi.get] Failed to parse response: {}", .{err});
+        log.err("Failed to parse HTTP response: {}", .{err});
         return error.HttpRequestFailed;
     };
-
-    std.log.debug("[ImmichApi.get] Request succeeded", .{});
 
     return result;
 }
