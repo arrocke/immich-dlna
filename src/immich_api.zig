@@ -1,38 +1,18 @@
 const std = @import("std");
+const zeit = @import("zeit");
 
 const Self = @This();
 
 const log = std.log.scoped(.ImmichApi);
 
-pub const Album = struct {
+const JsonAlbum = struct {
     id: []u8,
     albumName: []u8,
     updatedAt: []u8,
-    assets: []Asset,
-
-    pub fn clone(self: Album, allocator: std.mem.Allocator) !Album {
-        var assets = try std.ArrayList(Asset).initCapacity(allocator, self.assets.len);
-
-        for (self.assets) |asset| {
-            assets.appendAssumeCapacity(Asset{
-                .id = try allocator.dupe(u8, asset.id),
-                .originalPath = if (asset.originalPath) |path| try allocator.dupe(u8, path) else null,
-                .originalMimeType = if (asset.originalMimeType) |mimeType| try allocator.dupe(u8, mimeType) else null,
-                .updatedAt = try allocator.dupe(u8, asset.updatedAt),
-                .exifInfo = asset.exifInfo,
-            });
-        }
-
-        return Album{
-            .id = try allocator.dupe(u8, self.id),
-            .albumName = try allocator.dupe(u8, self.albumName),
-            .updatedAt = try allocator.dupe(u8, self.updatedAt),
-            .assets = try assets.toOwnedSlice(allocator),
-        };
-    }
+    assets: []JsonAsset,
 };
 
-pub const Asset = struct {
+const JsonAsset = struct {
     const EixfInfo = struct {
         exifImageHeight: u32,
         exifImageWidth: u32,
@@ -44,14 +24,97 @@ pub const Asset = struct {
     originalPath: ?[]u8,
     exifInfo: EixfInfo,
     updatedAt: []u8,
+};
 
-    pub fn clone(self: Asset, allocator: std.mem.Allocator) !Asset {
+pub const Album = struct {
+    id: []u8,
+    albumName: []u8,
+    updatedAt: i64,
+    assets: []const Asset,
+
+    pub fn fromJson(allocator: std.mem.Allocator, json: JsonAlbum) !Album {
+        const assets = try allocator.alloc(Asset, json.assets.len);
+        for (json.assets, 0..) |asset, i| {
+            assets[i] = try Asset.fromJson(allocator, asset);
+        }
+
+        const updatedAt = try zeit.instant(.{
+            .source = .{
+                .iso8601 = json.updatedAt,
+            },
+        });
+
+        return Album{
+            .id = try allocator.dupe(u8, json.id),
+            .albumName = try allocator.dupe(u8, json.albumName),
+            .updatedAt = updatedAt.unixTimestamp(),
+            .assets = assets,
+        };
+    }
+};
+
+pub const Asset = struct {
+    const MimeType = enum {
+        jpeg,
+        png,
+
+        pub fn fromString(maybeStr: ?[]const u8) ?MimeType {
+            if (maybeStr) |str| {
+                if (std.mem.eql(u8, "image/jpeg", str)) {
+                    return .jpeg;
+                } else if (std.mem.eql(u8, "image/png", str)) {
+                    return .png;
+                }
+            }
+
+            return null;
+        }
+
+        pub fn toExtension(self: MimeType) []const u8 {
+            switch (self) {
+                .jpeg => return ".jpg",
+                .png => return ".png",
+            }
+        }
+
+        pub fn toString(self: MimeType) []const u8 {
+            switch (self) {
+                .jpeg => return "image/jpeg",
+                .png => return "image/png",
+            }
+        }
+    };
+
+    id: []const u8,
+    width: u32,
+    height: u32,
+    size: u64,
+    mimeType: ?MimeType,
+    path: ?[]const u8,
+    updatedAt: i64,
+
+    pub fn deinit(self: *Asset, allocator: std.mem.Allocator) void {
+        allocator.free(self.id);
+        if (self.path) |path| {
+            allocator.free(path);
+        }
+    }
+
+    pub fn fromJson(allocator: std.mem.Allocator, json: JsonAsset) !Asset {
+        const updatedAt = try zeit.instant(.{
+            .source = .{
+                .iso8601 = json.updatedAt,
+            },
+        });
+
         return Asset{
-            .id = try allocator.dupe(u8, self.id),
-            .originalMimeType = if (self.originalMimeType) |mimeType| try allocator.dupe(u8, mimeType) else null,
-            .originalPath = if (self.originalPath) |path| try allocator.dupe(u8, path) else null,
-            .updatedAt = try allocator.dupe(u8, self.updatedAt),
-            .exifInfo = self.exifInfo,
+            .id = try allocator.dupe(u8, json.id),
+            .mimeType = MimeType.fromString(json.originalMimeType),
+            .path = if (json.originalPath) |path| try allocator.dupe(u8, path) else null,
+            .updatedAt = updatedAt.unixTimestamp(),
+            .width = json.exifInfo.exifImageWidth,
+            .height = json.exifInfo.exifImageHeight,
+            .size = json.exifInfo.fileSizeInByte,
         };
     }
 };
@@ -83,12 +146,12 @@ pub fn getAlbums(self: *Self) ![]const Album {
         log.err("GET /albums failed: {}", .{err});
     }
 
-    const parsedAlbums = try self.get([]Album, "/albums", .{});
+    const parsedAlbums = try self.get([]JsonAlbum, "/albums", .{});
     defer parsedAlbums.deinit();
 
     const albums = try self.allocator.alloc(Album, parsedAlbums.value.len);
     for (parsedAlbums.value, 0..) |album, i| {
-        albums[i] = try album.clone(self.allocator);
+        albums[i] = try Album.fromJson(self.allocator, album);
     }
 
     log.info("GET /albums", .{});
@@ -101,10 +164,10 @@ pub fn getAlbum(self: *Self, id: []const u8) !Album {
         log.err("GET /albums/{s} failed: {}", .{ id, err });
     }
 
-    const parsedAlbum = try self.get(Album, "/albums/{s}", .{id});
+    const parsedAlbum = try self.get(JsonAlbum, "/albums/{s}", .{id});
     defer parsedAlbum.deinit();
 
-    const album = try parsedAlbum.value.clone(self.allocator);
+    const album = try Album.fromJson(self.allocator, parsedAlbum.value);
 
     log.info("GET /albums/{s}", .{id});
 
@@ -116,10 +179,10 @@ pub fn getAsset(self: *Self, id: []const u8) !Asset {
         log.err("GET /assets/{s} failed: {}", .{ id, err });
     }
 
-    const parsedAsset = try self.get(Asset, "/assets/{s}", .{id});
+    const parsedAsset = try self.get(JsonAsset, "/assets/{s}", .{id});
     defer parsedAsset.deinit();
 
-    const asset = try parsedAsset.value.clone(self.allocator);
+    const asset = try Asset.fromJson(self.allocator, parsedAsset.value);
 
     log.info("GET /assets/{s}", .{id});
 

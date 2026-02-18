@@ -150,9 +150,9 @@ fn getInfoCallback(pathCstr: [*c]const u8, fileInfo: ?*c.UpnpFileInfo, cookie: ?
 
         std.log.debug("[virtual_fs.getInfoCallback] found asset", .{});
 
-        _ = c.UpnpFileInfo_set_FileLength(fileInfo, asset.value.exifInfo.fileSizeInByte);
-        if (asset.value.originalMimeType) |mimeType| {
-            const cstr = ctx.allocator.dupeZ(u8, mimeType) catch {
+        _ = c.UpnpFileInfo_set_FileLength(fileInfo, @intCast(asset.value.size));
+        if (asset.value.mimeType) |mimeType| {
+            const cstr = ctx.allocator.dupeZ(u8, mimeType.toString()) catch {
                 std.log.err("[virtual_fs.getInfoCallback] failed to create mime type", .{});
                 return -1;
             };
@@ -164,17 +164,7 @@ fn getInfoCallback(pathCstr: [*c]const u8, fileInfo: ?*c.UpnpFileInfo, cookie: ?
         }
         _ = c.UpnpFileInfo_set_IsReadable(fileInfo, 1);
         _ = c.UpnpFileInfo_set_IsDirectory(fileInfo, 0);
-
-        const updatedAt = zeit.instant(.{
-            .source = .{
-                .iso8601 = asset.value.updatedAt,
-            },
-        }) catch {
-            std.log.err("[virtual_fs.getInfoCallback] failed to parse updated at date", .{});
-            return -1;
-        };
-        std.log.debug("[virtual_fs.getInfoCallback] parsed updated date", .{});
-        _ = c.UpnpFileInfo_set_LastModified(fileInfo, updatedAt.unixTimestamp());
+        _ = c.UpnpFileInfo_set_LastModified(fileInfo, asset.value.updatedAt);
     }
 
     return 0;
@@ -239,7 +229,7 @@ fn openCallback(pathCstr: [*c]const u8, fileMode: c.enum_UpnpOpenFileMode, cooki
 
         std.log.debug("[virtual_fs.openCallback] found asset", .{});
 
-        const filePath = asset.value.originalPath orelse {
+        const filePath = asset.value.path orelse {
             std.log.err("[virtual_fs.openCallback] asset path not found", .{});
             return null;
         };

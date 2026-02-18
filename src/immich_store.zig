@@ -1,8 +1,8 @@
 const std = @import("std");
 
 const ImmichApi = @import("immich_api.zig");
-const Album = ImmichApi.Album;
-const Asset = ImmichApi.Asset;
+pub const Album = ImmichApi.Album;
+pub const Asset = ImmichApi.Asset;
 
 const Self = @This();
 pub fn LockedResource(T: type) type {
