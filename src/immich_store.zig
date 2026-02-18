@@ -53,9 +53,9 @@ pub fn getAlbums(self: *Self) !LockedResource([]const Album) {
         };
     }
 
-    std.log.info("[ImmichApi.getAlbums] cache miss", .{});
-
     self.cacheLock.unlockShared();
+
+    std.log.info("[ImmichApi.getAlbums] cache miss", .{});
 
     const albums = try self.immichClient.getAlbums();
 
@@ -70,71 +70,73 @@ pub fn getAlbums(self: *Self) !LockedResource([]const Album) {
     };
 }
 
-pub fn getAlbum(self: *Self, id: []const u8) !LockedResource(*Album) {
+pub fn getAlbum(self: *Self, id: []const u8) !LockedResource(Album) {
     self.cacheLock.lockShared();
 
-    const entry = self.albumCache.getOrPut(id) catch |err| {
-        self.cacheLock.unlockShared();
-        return err;
-    };
-    if (entry.found_existing) {
+    const cachedAlbum = self.albumCache.get(id);
+    if (cachedAlbum) |album| {
         std.log.info("[ImmichApi.getAlbum] cache hit: {s}", .{id});
 
-        return LockedResource(*Album){
-            .value = entry.value_ptr,
+        return .{
+            .value = album,
             .lock = &self.cacheLock,
         };
-    } else {
-        self.cacheLock.unlockShared();
+    }
 
-        std.log.info("[ImmichApi.getAlbum] cache miss: {s}", .{id});
-        const album = try self.immichClient.getAlbum(id);
+    self.cacheLock.unlockShared();
 
-        self.cacheLock.lock();
-        entry.value_ptr.* = album;
-        for (album.assets) |asset| {
-            self.assetCache.put(asset.id, asset) catch |err| {
-                self.cacheLock.unlock();
-                return err;
-            };
-        }
-        self.cacheLock.unlock();
+    std.log.info("[ImmichApi.getAlbum] cache miss: {s}", .{id});
+    const album = try self.immichClient.getAlbum(id);
 
-        self.cacheLock.lockShared();
-        return LockedResource(*Album){
-            .value = entry.value_ptr,
+    try self.cacheAlbum(album);
+
+    self.cacheLock.lockShared();
+    return .{
+        .value = album,
+        .lock = &self.cacheLock,
+    };
+}
+
+pub fn getAsset(self: *Self, id: []const u8) !LockedResource(Asset) {
+    self.cacheLock.lockShared();
+
+    const cachedAsset = self.assetCache.get(id);
+    if (cachedAsset) |asset| {
+        std.log.info("[ImmichApi.getAsset] cache hit: {s}", .{id});
+
+        return .{
+            .value = asset,
             .lock = &self.cacheLock,
         };
+    }
+
+    self.cacheLock.unlockShared();
+
+    std.log.info("[ImmichApi.getAsset] cache miss: {s}", .{id});
+    const asset = try self.immichClient.getAsset(id);
+
+    try self.cacheAsset(asset);
+
+    self.cacheLock.lockShared();
+    return .{
+        .value = asset,
+        .lock = &self.cacheLock,
+    };
+}
+
+fn cacheAlbum(self: *Self, album: Album) !void {
+    self.cacheLock.lock();
+    defer self.cacheLock.unlock();
+
+    try self.albumCache.put(album.id, album);
+    for (album.assets) |asset| {
+        try self.assetCache.put(asset.id, asset);
     }
 }
 
-pub fn getAsset(self: *Self, id: []const u8) !LockedResource(*Asset) {
-    self.cacheLock.lockShared();
+fn cacheAsset(self: *Self, asset: Asset) !void {
+    self.cacheLock.lock();
+    defer self.cacheLock.unlock();
 
-    const entry = self.assetCache.getOrPut(id) catch |err| {
-        self.cacheLock.unlockShared();
-        return err;
-    };
-    if (entry.found_existing) {
-        std.log.info("[ImmichApi.getAsset] cache hit: {s}", .{id});
-        return LockedResource(*Asset){
-            .value = entry.value_ptr,
-            .lock = &self.cacheLock,
-        };
-    } else {
-        self.cacheLock.unlockShared();
-
-        std.log.info("[ImmichApi.getAsset] cache miss: {s}", .{id});
-        const asset = try self.immichClient.getAsset(id);
-
-        self.cacheLock.lock();
-        entry.value_ptr.* = asset;
-        self.cacheLock.unlock();
-
-        self.cacheLock.lockShared();
-        return LockedResource(*Asset){
-            .value = entry.value_ptr,
-            .lock = &self.cacheLock,
-        };
-    }
+    try self.assetCache.put(asset.id, asset);
 }
