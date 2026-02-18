@@ -8,10 +8,10 @@ pub const Album = struct {
     updatedAt: []u8,
     assets: []Asset,
 
-    pub fn clone(allocator: std.mem.Allocator, original: Album) !Album {
-        var assets = try std.ArrayList(Asset).initCapacity(allocator, original.assets.len);
+    pub fn clone(self: Album, allocator: std.mem.Allocator) !Album {
+        var assets = try std.ArrayList(Asset).initCapacity(allocator, self.assets.len);
 
-        for (original.assets) |asset| {
+        for (self.assets) |asset| {
             assets.appendAssumeCapacity(Asset{
                 .id = try allocator.dupe(u8, asset.id),
                 .originalPath = if (asset.originalPath) |path| try allocator.dupe(u8, path) else null,
@@ -22,9 +22,9 @@ pub const Album = struct {
         }
 
         return Album{
-            .id = try allocator.dupe(u8, original.id),
-            .albumName = try allocator.dupe(u8, original.albumName),
-            .updatedAt = try allocator.dupe(u8, original.updatedAt),
+            .id = try allocator.dupe(u8, self.id),
+            .albumName = try allocator.dupe(u8, self.albumName),
+            .updatedAt = try allocator.dupe(u8, self.updatedAt),
             .assets = try assets.toOwnedSlice(allocator),
         };
     }
@@ -43,13 +43,13 @@ pub const Asset = struct {
     exifInfo: EixfInfo,
     updatedAt: []u8,
 
-    pub fn clone(allocator: std.mem.Allocator, parsed: Asset) !Asset {
+    pub fn clone(self: Asset, allocator: std.mem.Allocator) !Asset {
         return Asset{
-            .id = try allocator.dupe(u8, parsed.id),
-            .originalMimeType = if (parsed.originalMimeType) |mimeType| try allocator.dupe(u8, mimeType) else null,
-            .originalPath = if (parsed.originalPath) |path| try allocator.dupe(u8, path) else null,
-            .updatedAt = try allocator.dupe(u8, parsed.updatedAt),
-            .exifInfo = parsed.exifInfo,
+            .id = try allocator.dupe(u8, self.id),
+            .originalMimeType = if (self.originalMimeType) |mimeType| try allocator.dupe(u8, mimeType) else null,
+            .originalPath = if (self.originalPath) |path| try allocator.dupe(u8, path) else null,
+            .updatedAt = try allocator.dupe(u8, self.updatedAt),
+            .exifInfo = self.exifInfo,
         };
     }
 };
@@ -125,7 +125,7 @@ pub fn getAlbums(self: *Self) !LockedResource([]const Album) {
         return err;
     };
     for (parsedAlbums.value) |album| {
-        albums.appendAssumeCapacity(try Album.clone(self.allocator, album));
+        albums.appendAssumeCapacity(try album.clone(self.allocator));
     }
 
     const albumsSlice = try albums.toOwnedSlice(self.allocator);
@@ -157,7 +157,7 @@ pub fn getAlbum(self: *Self, id: []const u8) !LockedResource(*Album) {
         defer parsedAlbum.deinit();
 
         self.cacheLock.lock();
-        const album = Album.clone(self.allocator, parsedAlbum.value) catch |err| {
+        const album = parsedAlbum.value.clone(self.allocator) catch |err| {
             self.cacheLock.unlock();
             return err;
         };
@@ -196,7 +196,7 @@ pub fn getAsset(self: *Self, id: []const u8) !LockedResource(*Asset) {
         defer parsedAsset.deinit();
 
         self.cacheLock.lock();
-        entry.value_ptr.* = Asset.clone(self.allocator, parsedAsset.value) catch |err| {
+        entry.value_ptr.* = parsedAsset.value.clone(self.allocator) catch |err| {
             self.cacheLock.unlock();
             return err;
         };
