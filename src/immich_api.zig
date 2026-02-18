@@ -32,7 +32,17 @@ pub const Album = struct {
     updatedAt: i64,
     assets: []const Asset,
 
-    pub fn fromJson(allocator: std.mem.Allocator, json: JsonAlbum) !Album {
+    pub fn deinit(self: *const Album, allocator: std.mem.Allocator) void {
+        allocator.free(self.id);
+        allocator.free(self.albumName);
+
+        for (self.assets) |asset| {
+            asset.deinit(allocator);
+        }
+        allocator.free(self.assets);
+    }
+
+    fn fromJson(allocator: std.mem.Allocator, json: JsonAlbum) !Album {
         const assets = try allocator.alloc(Asset, json.assets.len);
         for (json.assets, 0..) |asset, i| {
             assets[i] = try Asset.fromJson(allocator, asset);
@@ -93,11 +103,23 @@ pub const Asset = struct {
     path: ?[]const u8,
     updatedAt: i64,
 
-    pub fn deinit(self: *Asset, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const Asset, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
         if (self.path) |path| {
             allocator.free(path);
         }
+    }
+
+    pub fn clone(self: *const Asset, allocator: std.mem.Allocator) !Asset {
+        return Asset{
+            .id = try allocator.dupe(u8, self.id),
+            .mimeType = self.mimeType,
+            .path = if (self.path) |path| try allocator.dupe(u8, path) else null,
+            .updatedAt = self.updatedAt,
+            .width = self.width,
+            .height = self.height,
+            .size = self.size,
+        };
     }
 
     pub fn fromJson(allocator: std.mem.Allocator, json: JsonAsset) !Asset {

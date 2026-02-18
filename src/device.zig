@@ -194,7 +194,6 @@ const ActionRequest = struct {
     }
 
     pub fn setActionResult(self: *ActionRequest, document: *c.struct__IXML_Document) void {
-        std.log.debug("[device.ActionRequest.setActionResult] Response: {s}", .{c.ixmlDocumenttoString(document)});
         _ = c.UpnpActionRequest_set_ActionResult(self.rawRequest, document);
     }
 
