@@ -8,10 +8,10 @@ pub const Album = struct {
     updatedAt: []u8,
     assets: []Asset,
 
-    pub fn from_parsed(allocator: std.mem.Allocator, parsed: std.json.Parsed(Album)) !Album {
-        var assets = try std.ArrayList(Asset).initCapacity(allocator, parsed.value.assets.len);
+    pub fn clone(allocator: std.mem.Allocator, original: Album) !Album {
+        var assets = try std.ArrayList(Asset).initCapacity(allocator, original.assets.len);
 
-        for (parsed.value.assets) |asset| {
+        for (original.assets) |asset| {
             assets.appendAssumeCapacity(Asset{
                 .id = try allocator.dupe(u8, asset.id),
                 .originalPath = if (asset.originalPath) |path| try allocator.dupe(u8, path) else null,
@@ -22,9 +22,9 @@ pub const Album = struct {
         }
 
         return Album{
-            .id = try allocator.dupe(u8, parsed.value.id),
-            .albumName = try allocator.dupe(u8, parsed.value.albumName),
-            .updatedAt = try allocator.dupe(u8, parsed.value.updatedAt),
+            .id = try allocator.dupe(u8, original.id),
+            .albumName = try allocator.dupe(u8, original.albumName),
+            .updatedAt = try allocator.dupe(u8, original.updatedAt),
             .assets = try assets.toOwnedSlice(allocator),
         };
     }
@@ -43,20 +43,20 @@ pub const Asset = struct {
     exifInfo: EixfInfo,
     updatedAt: []u8,
 
-    pub fn from_parsed(allocator: std.mem.Allocator, parsed: std.json.Parsed(Asset)) !Asset {
+    pub fn clone(allocator: std.mem.Allocator, parsed: Asset) !Asset {
         return Asset{
-            .id = try allocator.dupe(u8, parsed.value.id),
-            .originalMimeType = if (parsed.value.originalMimeType) |mimeType| try allocator.dupe(u8, mimeType) else null,
-            .originalPath = if (parsed.value.originalPath) |path| try allocator.dupe(u8, path) else null,
-            .updatedAt = try allocator.dupe(u8, parsed.value.updatedAt),
-            .exifInfo = parsed.value.exifInfo,
+            .id = try allocator.dupe(u8, parsed.id),
+            .originalMimeType = if (parsed.originalMimeType) |mimeType| try allocator.dupe(u8, mimeType) else null,
+            .originalPath = if (parsed.originalPath) |path| try allocator.dupe(u8, path) else null,
+            .updatedAt = try allocator.dupe(u8, parsed.updatedAt),
+            .exifInfo = parsed.exifInfo,
         };
     }
 };
 
 pub fn LockedResource(T: type) type {
     return struct {
-        value: *T,
+        value: T,
         lock: *std.Thread.RwLock,
 
         pub fn deinit(self: *LockedResource(T)) void {
@@ -69,6 +69,7 @@ apiKey: []const u8,
 baseUrl: []const u8,
 allocator: std.mem.Allocator,
 
+albumsCache: ?[]const Album,
 albumCache: std.hash_map.StringHashMap(Album),
 assetCache: std.hash_map.StringHashMap(Asset),
 cacheLock: std.Thread.RwLock,
@@ -79,6 +80,7 @@ pub fn init(allocator: std.mem.Allocator, apiKey: []const u8, baseUrl: []const u
         .baseUrl = baseUrl,
         .allocator = allocator,
 
+        .albumsCache = null,
         .albumCache = std.hash_map.StringHashMap(Album).init(allocator),
         .assetCache = std.hash_map.StringHashMap(Asset).init(allocator),
         .cacheLock = std.Thread.RwLock{},
@@ -97,13 +99,48 @@ const GetRequestError = error{
     FailedStatusCode,
 };
 
-pub fn getAlbums(self: *Self) !std.json.Parsed([]Album) {
-    return self.get([]Album, "/albums", .{});
+pub fn getAlbums(self: *Self) !LockedResource([]const Album) {
+    self.cacheLock.lockShared();
+
+    if (self.albumsCache) |cache| {
+        std.log.info("[ImmichApi.getAlbums] cache hit", .{});
+        return LockedResource([]const Album){
+            .value = cache,
+            .lock = &self.cacheLock,
+        };
+    }
+
+    std.log.info("[ImmichApi.getAlbums] cache miss", .{});
+
+    self.cacheLock.unlockShared();
+
+    const parsedAlbums = self.get([]Album, "/albums", .{}) catch |err| {
+        self.cacheLock.unlock();
+        return err;
+    };
+    defer parsedAlbums.deinit();
+
+    var albums = std.ArrayList(Album).initCapacity(self.allocator, parsedAlbums.value.len) catch |err| {
+        self.cacheLock.unlock();
+        return err;
+    };
+    for (parsedAlbums.value) |album| {
+        albums.appendAssumeCapacity(try Album.clone(self.allocator, album));
+    }
+
+    const albumsSlice = try albums.toOwnedSlice(self.allocator);
+    self.cacheLock.lock();
+    self.albumsCache = albumsSlice;
+    self.cacheLock.unlock();
+
+    self.cacheLock.lockShared();
+    return LockedResource([]const Album){
+        .value = self.albumsCache.?,
+        .lock = &self.cacheLock,
+    };
 }
 
-pub fn getAlbum(self: *Self, id: []const u8) !LockedResource(Album) {
-    std.log.info("[ImmichApi.getAlbum] cache size: {d}", .{self.albumCache.count()});
-
+pub fn getAlbum(self: *Self, id: []const u8) !LockedResource(*Album) {
     self.cacheLock.lockShared();
 
     const entry = self.albumCache.getOrPut(id) catch |err| {
@@ -120,7 +157,7 @@ pub fn getAlbum(self: *Self, id: []const u8) !LockedResource(Album) {
         defer parsedAlbum.deinit();
 
         self.cacheLock.lock();
-        const album = Album.from_parsed(self.allocator, parsedAlbum) catch |err| {
+        const album = Album.clone(self.allocator, parsedAlbum.value) catch |err| {
             self.cacheLock.unlock();
             return err;
         };
@@ -136,15 +173,13 @@ pub fn getAlbum(self: *Self, id: []const u8) !LockedResource(Album) {
         self.cacheLock.lockShared();
     }
 
-    return LockedResource(Album){
+    return LockedResource(*Album){
         .value = entry.value_ptr,
         .lock = &self.cacheLock,
     };
 }
 
-pub fn getAsset(self: *Self, id: []const u8) !LockedResource(Asset) {
-    std.log.info("[ImmichApi.getAsset] cache size: {d}", .{self.assetCache.count()});
-
+pub fn getAsset(self: *Self, id: []const u8) !LockedResource(*Asset) {
     self.cacheLock.lockShared();
 
     const entry = self.assetCache.getOrPut(id) catch |err| {
@@ -161,7 +196,7 @@ pub fn getAsset(self: *Self, id: []const u8) !LockedResource(Asset) {
         defer parsedAsset.deinit();
 
         self.cacheLock.lock();
-        entry.value_ptr.* = Asset.from_parsed(self.allocator, parsedAsset) catch |err| {
+        entry.value_ptr.* = Asset.clone(self.allocator, parsedAsset.value) catch |err| {
             self.cacheLock.unlock();
             return err;
         };
@@ -170,7 +205,7 @@ pub fn getAsset(self: *Self, id: []const u8) !LockedResource(Asset) {
         self.cacheLock.lockShared();
     }
 
-    return LockedResource(Asset){
+    return LockedResource(*Asset){
         .value = entry.value_ptr,
         .lock = &self.cacheLock,
     };

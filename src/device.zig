@@ -79,7 +79,7 @@ fn eventCallback(
                     .browse => |action| {
                         var resources: std.ArrayList(BrowseReponse.Resource) = .{};
                         if (std.mem.eql(u8, action.objectId, "0")) {
-                            const albums = ctx.immichClient.getAlbums() catch |err| {
+                            var albums = ctx.immichClient.getAlbums() catch |err| {
                                 std.log.err("[device.eventCallback] Failed to fetch albums {}", .{err});
                                 return 0;
                             };
