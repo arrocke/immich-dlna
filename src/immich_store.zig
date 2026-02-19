@@ -29,7 +29,7 @@ albumCache: std.hash_map.StringHashMap(Album),
 assetCache: std.hash_map.StringHashMap(Asset),
 cacheLock: std.Thread.RwLock,
 
-pub fn init(allocator: std.mem.Allocator, apiKey: []const u8, baseUrl: []const u8) Self {
+pub fn init(allocator: std.mem.Allocator, apiKey: []const u8, baseUrl: []const u8, cache_timeout_seconds: u32) Self {
     return .{
         .allocator = allocator,
         .immichClient = ImmichApi.init(allocator, apiKey, baseUrl),
@@ -38,7 +38,7 @@ pub fn init(allocator: std.mem.Allocator, apiKey: []const u8, baseUrl: []const u
         .albumCache = std.hash_map.StringHashMap(Album).init(allocator),
         .assetCache = std.hash_map.StringHashMap(Asset).init(allocator),
 
-        .cache_timeout_seconds = 30 * 60, // 30 minutes
+        .cache_timeout_seconds = cache_timeout_seconds,
         .cacheInvalidationTimeout = null,
         .cacheLock = std.Thread.RwLock{},
     };

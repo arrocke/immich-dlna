@@ -1,6 +1,8 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const prod = b.option(bool, "prod", "Build for production") orelse false;
+
     const zeit = b.dependency("zeit", .{});
 
     const exe_mod = b.addModule("main", .{
@@ -12,6 +14,10 @@ pub fn build(b: *std.Build) void {
     exe_mod.linkSystemLibrary("upnp", .{
         .use_pkg_config = .yes,
     });
+
+    const options = b.addOptions();
+    options.addOption(bool, "prod", prod);
+    exe_mod.addImport("build_options", options.createModule());
 
     const exe = b.addExecutable(.{
         .name = "immich-dlna",
