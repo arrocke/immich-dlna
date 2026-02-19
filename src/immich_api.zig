@@ -219,7 +219,7 @@ pub fn get(self: *Self, Response: type, comptime path: []const u8, pathArgs: any
     const fullPath = try std.fmt.allocPrint(self.allocator, path, pathArgs);
     defer self.allocator.free(fullPath);
 
-    const url = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.baseUrl, fullPath });
+    const url = try std.fmt.allocPrint(self.allocator, "{s}/api{s}", .{ self.baseUrl, fullPath });
     defer self.allocator.free(url);
 
     var body = std.Io.Writer.Allocating.init(self.allocator);
