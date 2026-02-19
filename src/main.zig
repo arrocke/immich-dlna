@@ -13,7 +13,6 @@ fn handleSignal(sig: c_int) callconv(.c) void {
 }
 
 pub fn main() !void {
-    const port: u16 = 8888;
     const ip_address: ?[*:0]const u8 = null;
 
     const allocator = std.heap.c_allocator;
@@ -32,10 +31,10 @@ pub fn main() !void {
     };
 
     // Initialize and register device
-    var device = try Device.init(port, ip_address, &context);
+    var device = try Device.init(config.port, ip_address, &context);
     defer device.deinit();
 
-    std.log.debug("[main] Device ready, waiting for connections", .{});
+    std.log.debug("[main] Device ready, waiting for connections on port {d}", .{config.port});
 
     // Setup signal handlers
     var act = std.posix.Sigaction{

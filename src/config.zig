@@ -8,6 +8,7 @@ const log = std.log.scoped(.Config);
 cache_timeout: u32,
 immich_api_key: []const u8,
 immich_url: []const u8,
+port: u16,
 allocator: std.mem.Allocator,
 
 const CONFIG_LOCATION = if (build_options.prod)
@@ -59,6 +60,11 @@ fn readConfigFile(self: *Self) !void {
             self.immich_api_key = try self.allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "IMMICH_URL")) {
             self.immich_url = try self.allocator.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "IMMICH_URL")) {
+            self.port = std.fmt.parseInt(u16, value, 10) catch blk: {
+                log.warn("Invalid port, falling back to {d}", .{self.port});
+                break :blk self.port;
+            };
         } else {
             log.debug("Ignoring unrecognized setting {s}", .{key});
         }
@@ -77,6 +83,13 @@ fn readEnvVars(self: *Self) !void {
         log.debug("Reading IMMICH_URL", .{});
         self.immich_url = try self.allocator.dupe(u8, immich_url);
     }
+    if (env.get("PORT")) |portStr| {
+        log.debug("Reading PORT", .{});
+        self.port = std.fmt.parseInt(u16, portStr, 10) catch blk: {
+            log.warn("Invalid port, falling back to {d}", .{self.port});
+            break :blk self.port;
+        };
+    }
 }
 
 pub fn load(allocator: std.mem.Allocator) !Self {
@@ -85,6 +98,7 @@ pub fn load(allocator: std.mem.Allocator) !Self {
         .cache_timeout = 30 * 60, // 30 minutes
         .immich_api_key = &[_]u8{},
         .immich_url = try allocator.dupe(u8, "http://localhost:2283"),
+        .port = 8200,
     };
 
     try settings.readConfigFile();

@@ -62,6 +62,11 @@
         options = with lib; {
           services.immich-dlna = {
             enable = mkEnableOption "Enable the DLNA server for Immich";
+            port = mkOption {
+              type = types.int;
+              default = 8200;
+              description = "The port to the DLNA server";
+            };
             immichApiKeyFile = mkOption {
               type = types.path;
               description = "The path to a file that contains the API key for your Immich API";
@@ -107,6 +112,7 @@
               ];
               Environment = [
                 "IMMICH_URL=${cfg.immichUrl}"
+                "PORT=${cfg.port}"
               ];
             };
           };
