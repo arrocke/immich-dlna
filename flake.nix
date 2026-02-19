@@ -40,16 +40,10 @@
 
         src = ./.;
 
-        nativeBuildInputs = with zigEnv.pkgs; [ patchelf ];
-        buildInputs = with zigEnv.pkgs; [ libupnp ];
-        
-        zigPreferMusl = true;
+        buildInputs = [ pkgs.libupnp ];
+
         zigBuildZonLock = ./build.zig.zon2json-lock;
         zigBuildFlags = [ "-Dprod" "-Doptimize=ReleaseFast" ];
-
-        postFixup = ''
-          patchelf --set-rpath ${zigEnv.pkgs.libupnp}/lib $out/bin/immich-dlna
-        '';
 
         meta = with pkgs.lib; {
           description = "DLNA server for your Immich albums";
