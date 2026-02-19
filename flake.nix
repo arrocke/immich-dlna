@@ -81,10 +81,20 @@
               default = "/var/lib/immich";
               description = "The file path where your Immich server stores files";
             };
+            openFirewall = mkOption {
+              type = types.bool;
+              default = false;
+              description = "Open the TCP port for the server as well as UDP port 1200 for upnp.";
+            };
           };
         };
 
         config = lib.mkIf (cfg.enable && config.services.immich.enable) {
+          networking.firewall = lib.mkIf (cfg.openFirewall) {
+            allowedTCPPorts = [cfg.port];
+            allowedUDPPorts = [1900];
+          };
+
           systemd.services.immich-dlna = {
             description = "Immich DLNA Server";
             wantedBy = [ "multi-user.target" ];
