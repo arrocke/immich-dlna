@@ -42,8 +42,9 @@
 
         nativeBuildInputs = with zigEnv.pkgs; [ libupnp ];
         
+        zigTarget = "x86_64-linux-musl";
         zigBuildZonLock = ./build.zig.zon2json-lock;
-        zigBuildFlags = [ "-Dprod" ];
+        zigBuildFlags = [ "-Dprod" "-Doptimize=ReleaseSmall" ];
 
         meta = with pkgs.lib; {
           description = "DLNA server for your Immich albums";
