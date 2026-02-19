@@ -1,139 +1,138 @@
 {
-  description = "Immich DLNA - Sync Immich albums to DLNA-accessible directories";
+  description = "DLNA server for Immich";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
+    zig.url = "github:mitchellh/zig-overlay";
+    zig.inputs.nixpkgs.follows = "nixpkgs";
+    zls.url = "github:zigtools/zls/0.15.1";
+    zls.inputs.nixpkgs.follows = "nixpkgs";
+
+    zig2nix = {
+      url = "github:Cloudef/zig2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs }:
-    {
-      nixosModules.default = { config, lib, pkgs, ... }: 
-        let
-          cfg = config.services.immich-dlna;
-          
-          # Build the package using the system's pkgs
-          immich-dlna = pkgs.writeScriptBin "immich-dlna" ''
-            #!${pkgs.bash}/bin/bash
-            export PATH=${pkgs.lib.makeBinPath [
-              pkgs.jq
-              pkgs.curl
-              pkgs.coreutils
-              pkgs.gnused
-              pkgs.gnugrep
-              pkgs.findutils
-            ]}:$PATH
-            exec ${pkgs.bash}/bin/bash ${./sync-immich-albums.sh} "$@"
-          '';
-        in
-        {
-          options.services.immich-dlna = {
-            enable = lib.mkEnableOption "Immich DLNA sync service";
+  outputs = { self, nixpkgs, zig, zls, zig2nix, ... }: 
+    let
+      system = "x86_64-linux";
+      pkgs = import nixpkgs { inherit system; };
+      zigPkg = zig.packages.${system}."0.15.2";
 
-            package = lib.mkOption {
-              type = lib.types.package;
-              default = immich-dlna;
-              defaultText = lib.literalExpression "pkgs.writeScriptBin (from flake)";
-              description = "Package providing the immich-dlna script";
+      zigEnv = zig2nix.zig-env.${system} {
+          zig = zig2nix.packages.${system}.zig-latest;
+      };
+    in {
+      devShells.${system}.default = pkgs.mkShell {
+        packages = [
+          zigPkg
+          zls.packages.${system}.zls
+          pkgs.libupnp
+          pkgs.pkg-config
+          pkgs.opencode
+        ];
+      };
+
+      packages.${system}.immich-dlna = zigEnv.package rec {
+        pname = "immich-dlna";
+        version = "0.1.0";
+
+        src = ./.;
+
+        buildInputs = [ pkgs.libupnp ];
+
+        zigTarget = "native";
+        zigBuildZonLock = ./build.zig.zon2json-lock;
+        zigBuildFlags = [ "-Dprod" "-Doptimize=ReleaseFast" ];
+
+        meta = with pkgs.lib; {
+          description = "DLNA server for your Immich albums";
+          license = licenses.mit;
+          maintainers = [ { github = "arrocke"; } ];
+        };
+      };
+
+      defaultPackage.${system} = self.packages.${system}.immich-dlna;
+
+      nixosModules.default = { config, lib, pkgs, ... }:
+      let
+        cfg = config.services.immich-dlna;
+      in {
+        options = with lib; rec {
+          services.immich-dlna = {
+            enable = mkEnableOption "Enable the DLNA server for Immich";
+            port = mkOption {
+              type = types.int;
+              default = 8200;
+              description = "The port to the DLNA server";
             };
-
-            immich = {
-              apiKeyFile = lib.mkOption {
-                type = lib.types.path;
-                description = "File containing IMMICH_API_KEY";
-                example = "/run/secrets/immich-api-key";
-              };
-
-              host = lib.mkOption {
-                type = lib.types.str;
-                default = "localhost";
-                description = "Immich server host";
-                example = "immich.example.com";
-              };
-
-              port = lib.mkOption {
-                type = lib.types.port;
-                default = 2283;
-                description = "Immich server port";
-              };
+            immichApiKeyFile = mkOption {
+              type = types.path;
+              description = "The path to a file that contains the API key for your Immich API";
             };
-
-            albums = lib.mkOption {
-              type = lib.types.listOf lib.types.str;
-              description = "List of album IDs to sync";
-              example = [ "album-id-1" "album-id-2" ];
+            immichUrl = mkOption {
+              type = types.str;
+              default = "http://localhost:2283";
+              description = "The URL where your Immich server is located";
             };
-
-            dlnaDirectory = lib.mkOption {
-              type = lib.types.str;
-              default = "/var/lib/immich-dlna";
-              description = "Directory where DLNA album folders will be created";
+            immichDirectory = mkOption {
+              type = types.str;
+              default = "/var/lib/immich";
+              description = "The file path where your Immich server stores files";
             };
-
-            interval = lib.mkOption {
-              type = lib.types.str;
-              default = "hourly";
-              description = "How often to sync albums (systemd timer format)";
-              example = "daily";
+            openFirewall = mkOption {
+              type = types.bool;
+              default = false;
+              description = "Open the TCP port for the server as well as UDP port 1200 for upnp.";
             };
-          };
-
-          config = lib.mkIf cfg.enable {
-            systemd.services.immich-dlna = {
-              description = "Immich DLNA album sync";
-              after = [ "network.target" ];
-              
-              serviceConfig = {
-                Type = "oneshot";
-                User = "immich";
-                Group = "immich";
-
-                # Load API key securely
-                EnvironmentFile = cfg.immich.apiKeyFile;
-
-                Environment = [
-                  "IMMICH_URL=http://${cfg.immich.host}:${toString cfg.immich.port}"
-                ];
-
-                ExecStart = ''
-                  ${cfg.package}/bin/immich-dlna \
-                    --albums ${lib.concatStringsSep "," cfg.albums} \
-                    --root ${cfg.dlnaDirectory}
-                '';
-
-                # Security hardening
-                NoNewPrivileges = true;
-                PrivateTmp = true;
-                ProtectSystem = "strict";
-                ProtectHome = true;
-                ReadWritePaths = [ cfg.dlnaDirectory ];
-              };
+            dlnaOrigin = mkOption {
+              type = types.str;
+              default = "http://localhost:${port.default}";
+              description = "The origin to use when generating URLs to assets on the DLNA server.";
             };
-
-            systemd.timers.immich-dlna = {
-              description = "Timer for Immich DLNA album sync";
-              wantedBy = [ "timers.target" ];
-
-              timerConfig = {
-                OnCalendar = cfg.interval;
-                Persistent = true;
-                RandomizedDelaySec = "5m";
-              };
-            };
-
-            # Create the immich user if it doesn't exist
-            users.users.immich = lib.mkIf (!config.users.users ? immich) {
-              isSystemUser = true;
-              group = "immich";
-              description = "Immich DLNA service user";
-            };
-
-            users.groups.immich = lib.mkIf (!config.users.groups ? immich) {};
-
-            # Ensure the DLNA directory exists
-            systemd.tmpfiles.rules = [
-              "d ${cfg.dlnaDirectory} 0755 immich immich -"
-            ];
           };
         };
+
+        config = lib.mkIf (cfg.enable && config.services.immich.enable) {
+          networking.firewall = lib.mkIf (cfg.openFirewall) {
+            allowedTCPPorts = [cfg.port];
+            allowedUDPPorts = [1900];
+          };
+
+          systemd.services.immich-dlna = {
+            description = "Immich DLNA Server";
+            wantedBy = [ "multi-user.target" ];
+
+            after = [ "immich-server.service" ];
+            partOf = [ "immich-server.service" ];
+            requires = [ "immich-server.service" ];
+
+            serviceConfig = {
+              User = "immich";
+              Group = "immich";
+              ExecStart = "${self.packages.${pkgs.system}.immich-dlna}/bin/immich-dlna";
+
+              ProtectSystem = "strict";
+              ProtectHome = true;
+              PrivateTmp = true;
+              NoNewPrivileges = true;
+              ReadWritePaths = [ cfg.immichDirectory ];
+
+              Restart = "on-failure";
+              RestartSec = 5;
+
+              EnvironmentFile = [
+                cfg.immichApiKeyFile 
+              ];
+              Environment = [
+                "IMMICH_URL=${cfg.immichUrl}"
+                "PORT=${toString cfg.port}"
+                "DLNA_ORIGIN=${cfg.dlnaOrigin}"
+              ];
+            };
+          };
+        };
+      };
     };
 }

@@ -1,0 +1,5 @@
+- [ ] Support browse pagination
+- [ ] Add thumbnail support
+  - [ ] Add to browse response
+  - [ ] Handle file requests
+  - [ ] Cache thumbnails from immich if we cannot access the raw file directly
