@@ -40,7 +40,8 @@
 
         src = ./.;
 
-        nativeBuildInputs = with zigEnv.pkgs; [ libupnp patchelf ];
+        nativeBuildInputs = with zigEnv.pkgs; [ patchelf ];
+        buildInputs = with zigEnv.pkgs; [ libupnp ];
         
         zigPreferMusl = true;
         zigBuildZonLock = ./build.zig.zon2json-lock;
