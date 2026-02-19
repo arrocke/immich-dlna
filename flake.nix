@@ -8,17 +8,21 @@
     zls.url = "github:zigtools/zls/0.15.1";
     zls.inputs.nixpkgs.follows = "nixpkgs";
 
-    zon2nix = {
-      url = "github:nix-community/zon2nix?rev=f0ee7bd6491d5c7c6d15e0b7944824d253bcd311";
+    zig2nix = {
+      url = "github:Cloudef/zig2nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, zig, zls, zon2nix, ... }: 
+  outputs = { self, nixpkgs, zig, zls, zig2nix, ... }: 
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
       zigPkg = zig.packages.${system}."0.15.2";
+
+      zigEnv = zig2nix.zig-env.${system} {
+          zig = zig2nix.packages.${system}.zig-latest;
+      };
     in {
       devShells.${system}.default = pkgs.mkShell {
         packages = [
@@ -27,28 +31,19 @@
           pkgs.libupnp
           pkgs.pkg-config
           pkgs.opencode
-          zon2nix.packages.${system}.default
         ];
       };
 
-      packages.${system}.immich-dlna = pkgs.stdenv.mkDerivation rec {
+      packages.${system}.immich-dlna = zigEnv.package rec {
         pname = "immich-dlna";
         version = "0.1.0";
 
         src = ./.;
 
-        nativeBuildInputs = [ zigPkg pkgs.pkg-config ];
-        buildInputs = [ pkgs.libupnp ];
-
-        postPatch = ''
-          ln -s ${pkgs.callPackage ./deps.nix { }} $ZIG_GLOBAL_CACHE_DIR/p
-        '';
-
-        buildPhase = ''
-          export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
-          mkdir -p $ZIG_GLOBAL_CACHE_DIR
-          zig build install -Drelease-safe -Dprod --prefix $out
-        '';
+        nativeBuildInputs = with zigEnv.pkgs; [ libupnp ];
+        
+        zigBuildZonLock = ./build.zig.zon2json-lock;
+        zigBuildFlags = [ "-Dprod" ];
 
         meta = with pkgs.lib; {
           description = "DLNA server for your Immich albums";

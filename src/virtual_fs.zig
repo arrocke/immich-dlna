@@ -3,7 +3,7 @@ const zeit = @import("zeit");
 const Context = @import("context.zig");
 
 const c = @cImport({
-    @cInclude("upnp/upnp.h");
+    @cInclude("upnp.h");
 });
 
 const contentDirectoryXml: []const u8 = @embedFile("contentDirectory.xml");

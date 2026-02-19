@@ -1,13 +1,16 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const optimize = b.standardOptimizeOption(.{});
+    const target = b.standardTargetOptions(.{});
     const prod = b.option(bool, "prod", "Build for production") orelse false;
 
     const zeit = b.dependency("zeit", .{});
 
     const exe_mod = b.addModule("main", .{
         .root_source_file = b.path("src/main.zig"),
-        .target = b.graph.host,
+        .target = target,
+        .optimize = optimize,
         .link_libc = true,
     });
     exe_mod.addImport("zeit", zeit.module("zeit"));

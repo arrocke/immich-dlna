@@ -4,7 +4,7 @@ const ImmichStore = @import("immich_store.zig");
 const Context = @import("context.zig");
 
 const c = @cImport({
-    @cInclude("upnp/upnp.h");
+    @cInclude("upnp.h");
 });
 
 const Self = @This();
