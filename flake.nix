@@ -42,6 +42,7 @@
 
         buildInputs = [ pkgs.libupnp ];
 
+        zigTarget = "native";
         zigBuildZonLock = ./build.zig.zon2json-lock;
         zigBuildFlags = [ "-Dprod" "-Doptimize=ReleaseFast" ];
 
