@@ -20,24 +20,27 @@ pub fn deinit(self: *const Self) void {
     self.allocator.free(self.immich_api_key);
 }
 
-pub fn load(allocator: std.mem.Allocator) !Self {
+fn readConfigFile(self: *Self) !void {
     var configFile: std.fs.File = undefined;
     if (build_options.prod) {
-        configFile = try std.fs.openFileAbsolute(CONFIG_LOCATION, .{});
+        configFile = std.fs.openFileAbsolute(CONFIG_LOCATION, .{}) catch |err| {
+            if (err == std.fs.File.OpenError.FileNotFound) {
+                return;
+            }
+            return err;
+        };
     } else {
-        configFile = try std.fs.cwd().openFile(CONFIG_LOCATION, .{});
+        configFile = std.fs.cwd().openFile(CONFIG_LOCATION, .{}) catch |err| {
+            if (err == std.fs.File.OpenError.FileNotFound) {
+                return;
+            }
+            return err;
+        };
     }
     defer configFile.close();
 
     var buf: [1024]u8 = undefined;
     var reader = configFile.reader(&buf);
-
-    var settings = Self{
-        .allocator = allocator,
-        .cache_timeout = 30 * 60, // 30 minutes
-        .immich_api_key = &[_]u8{},
-        .immich_url = try allocator.dupe(u8, "http://localhost:2283"),
-    };
 
     while (try reader.interface.takeDelimiter('\n')) |line| {
         const splitPos = std.mem.indexOfScalar(u8, line, '=') orelse {
@@ -48,30 +51,44 @@ pub fn load(allocator: std.mem.Allocator) !Self {
         const value = line[(splitPos + 1)..];
 
         if (std.mem.eql(u8, key, "CACHE_TIMEOUT_SECONDS")) {
-            settings.cache_timeout = std.fmt.parseInt(u32, value, 10) catch {
-                log.warn("Invalid cache_timeout, falling back to {d}", .{settings.cache_timeout});
+            self.cache_timeout = std.fmt.parseInt(u32, value, 10) catch {
+                log.warn("Invalid cache_timeout, falling back to {d}", .{self.cache_timeout});
                 continue;
             };
         } else if (std.mem.eql(u8, key, "IMMICH_API_KEY")) {
-            settings.immich_api_key = try allocator.dupe(u8, value);
+            self.immich_api_key = try self.allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "IMMICH_URL")) {
-            settings.immich_url = try allocator.dupe(u8, value);
+            self.immich_url = try self.allocator.dupe(u8, value);
         } else {
             log.debug("Ignoring unrecognized setting {s}", .{key});
         }
     }
+}
 
-    var env = try std.process.getEnvMap(allocator);
+fn readEnvVars(self: *Self) !void {
+    var env = try std.process.getEnvMap(self.allocator);
     defer env.deinit();
 
     if (env.get("IMMICH_API_KEY")) |immich_api_key| {
         log.debug("Reading IMMICH_API_KEY", .{});
-        settings.immich_api_key = try allocator.dupe(u8, immich_api_key);
+        self.immich_api_key = try self.allocator.dupe(u8, immich_api_key);
     }
     if (env.get("IMMICH_URL")) |immich_url| {
         log.debug("Reading IMMICH_URL", .{});
-        settings.immich_url = try allocator.dupe(u8, immich_url);
+        self.immich_url = try self.allocator.dupe(u8, immich_url);
     }
+}
+
+pub fn load(allocator: std.mem.Allocator) !Self {
+    var settings = Self{
+        .allocator = allocator,
+        .cache_timeout = 30 * 60, // 30 minutes
+        .immich_api_key = &[_]u8{},
+        .immich_url = try allocator.dupe(u8, "http://localhost:2283"),
+    };
+
+    try settings.readConfigFile();
+    try settings.readEnvVars();
 
     if (settings.immich_api_key.len == 0 or settings.immich_url.len == 0) {
         log.err("IMMICH_API_KEY and IMMICH_URL settings required", .{});
