@@ -28,6 +28,8 @@ pub fn main() !void {
             config.immich_url,
             config.cache_timeout,
         ),
+        .dlna_origin = config.dlna_origin,
+        .port = config.port,
     };
 
     // Initialize and register device

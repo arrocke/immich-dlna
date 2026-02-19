@@ -6,7 +6,7 @@
   </specVersion>
   <device>
     <deviceType>urn:schemas-upnp-org:device:MediaServer:1</deviceType>
-    <friendlyName>Zig DLNA Server</friendlyName>
+    <friendlyName>Immich DLNA Server</friendlyName>
     <manufacturer>You</manufacturer>
     <modelName>ZigMediaServer</modelName>
     <UDN>uuid:12345678-1234-1234-1234-123456789abc</UDN>

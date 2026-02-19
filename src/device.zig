@@ -88,10 +88,13 @@ fn eventCallback(
                             const response = BrowseReponse{
                                 .parentId = action.objectId,
                                 .albums = albums.value,
-                                .updateId = "1",
+                                .updateId = 1,
+                                .count = @intCast(albums.value.len),
+                                .origin = ctx.dlna_origin,
+                                .allocator = ctx.allocator,
                             };
 
-                            const document = response.toIXMLDocument(ctx.allocator) catch |err| {
+                            const document = response.toIXMLDocument() catch |err| {
                                 std.log.err("[device.eventCallback] Failed to build browse response document: {}", .{err});
                                 return 0;
                             };
@@ -106,10 +109,13 @@ fn eventCallback(
                             const response = BrowseReponse{
                                 .parentId = action.objectId,
                                 .assets = album.value.assets,
-                                .updateId = "1",
+                                .updateId = 1,
+                                .count = @intCast(album.value.assets.len),
+                                .origin = ctx.dlna_origin,
+                                .allocator = ctx.allocator,
                             };
 
-                            const document = response.toIXMLDocument(ctx.allocator) catch |err| {
+                            const document = response.toIXMLDocument() catch |err| {
                                 std.log.err("[device.eventCallback] Failed to build browse response document: {}", .{err});
                                 return 0;
                             };
@@ -209,10 +215,14 @@ const ActionRequest = struct {
 const BrowseReponse = struct {
     albums: []const ImmichStore.Album = &[_]ImmichStore.Album{},
     assets: []const ImmichStore.Asset = &[_]ImmichStore.Asset{},
+    count: u32,
     parentId: []const u8,
-    updateId: [:0]const u8,
+    updateId: u32,
+    origin: []const u8,
 
-    pub fn toIXMLDocument(self: *const BrowseReponse, allocator: std.mem.Allocator) ![*c]c.struct__IXML_Document {
+    allocator: std.mem.Allocator,
+
+    pub fn toIXMLDocument(self: BrowseReponse) ![*c]c.struct__IXML_Document {
         const didlDocument = c.ixmlDocument_createDocument();
         const didlElement = c.ixmlDocument_createElement(didlDocument, "DIDL-Lite");
         _ = c.ixmlElement_setAttribute(didlElement, "xmlns", "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/");
@@ -222,12 +232,12 @@ const BrowseReponse = struct {
         _ = c.ixmlNode_appendChild(@ptrCast(didlDocument), @ptrCast(didlElement));
 
         for (self.albums) |asset| {
-            const albumElement = try albumToIXMLElement(allocator, @ptrCast(didlDocument), asset, self.parentId);
+            const albumElement = try self.albumToIXMLElement(@ptrCast(didlDocument), asset, self.parentId);
             _ = c.ixmlNode_appendChild(@ptrCast(didlElement), @ptrCast(albumElement));
         }
 
         for (self.assets) |asset| {
-            const assetElement = try assetToIXMLElement(allocator, @ptrCast(didlDocument), asset, self.parentId);
+            const assetElement = try self.assetToIXMLElement(@ptrCast(didlDocument), asset, self.parentId);
             _ = c.ixmlNode_appendChild(@ptrCast(didlElement), @ptrCast(assetElement));
         }
 
@@ -244,97 +254,81 @@ const BrowseReponse = struct {
             _ = c.ixmlNode_appendChild(@ptrCast(element), @ptrCast(text));
             _ = c.ixmlNode_appendChild(@ptrCast(browseResponseElement), @ptrCast(element));
         }
-
-        var buf: [1024]u8 = undefined;
-        const countStr = std.fmt.bufPrintZ(&buf, "{d}", .{self.assets.len + self.albums.len}) catch "";
-
         {
-            const element = c.ixmlDocument_createElement(document, "NumberReturned");
-            const text = c.ixmlDocument_createTextNode(document, countStr);
-            _ = c.ixmlNode_appendChild(@ptrCast(element), @ptrCast(text));
+            const element = try self.create_text_element_fmt(document, "NumberReturned", "{d}", .{self.albums.len + self.assets.len});
             _ = c.ixmlNode_appendChild(@ptrCast(browseResponseElement), @ptrCast(element));
         }
-
         {
-            const element = c.ixmlDocument_createElement(document, "TotalMatches");
-            const text = c.ixmlDocument_createTextNode(document, countStr);
-            _ = c.ixmlNode_appendChild(@ptrCast(element), @ptrCast(text));
+            const element = try self.create_text_element_fmt(document, "TotalMatches", "{d}", .{self.count});
             _ = c.ixmlNode_appendChild(@ptrCast(browseResponseElement), @ptrCast(element));
         }
-
         {
-            const element = c.ixmlDocument_createElement(document, "UpdateId");
-            const text = c.ixmlDocument_createTextNode(document, self.updateId);
-            _ = c.ixmlNode_appendChild(@ptrCast(element), @ptrCast(text));
+            const element = try self.create_text_element_fmt(document, "UpdateId", "{d}", .{self.updateId});
             _ = c.ixmlNode_appendChild(@ptrCast(browseResponseElement), @ptrCast(element));
         }
 
         return document;
     }
 
-    pub fn albumToIXMLElement(allocator: std.mem.Allocator, document: *c.struct__IXML_Document, album: ImmichStore.Album, parentId: []const u8) ![*c]c.struct__IXML_Element {
+    pub fn albumToIXMLElement(self: BrowseReponse, document: *c.struct__IXML_Document, album: ImmichStore.Album, parentId: []const u8) ![*c]c.struct__IXML_Element {
         const albumElement = c.ixmlDocument_createElement(document, "container");
-        try create_attribute(allocator, albumElement, "id", album.id);
-        try create_attribute(allocator, albumElement, "parentID", parentId);
-        try create_attribute(allocator, albumElement, "restricted", "1");
+        try self.create_attribute(albumElement, "id", album.id);
+        try self.create_attribute(albumElement, "parentID", parentId);
+        try self.create_attribute(albumElement, "restricted", "1");
 
-        const titleElement = try create_text_element(allocator, document, "dc:title", album.albumName);
+        const titleElement = try self.create_text_element(document, "dc:title", album.albumName);
         _ = c.ixmlNode_appendChild(@ptrCast(albumElement), @ptrCast(titleElement));
 
-        const classElement = try create_text_element(allocator, document, "upnp:class", "object.container");
+        const classElement = try self.create_text_element(document, "upnp:class", "object.container");
         _ = c.ixmlNode_appendChild(@ptrCast(albumElement), @ptrCast(classElement));
 
         return albumElement;
     }
 
-    pub fn assetToIXMLElement(allocator: std.mem.Allocator, document: *c.struct__IXML_Document, asset: ImmichStore.Asset, parentId: []const u8) ![*c]c.struct__IXML_Element {
+    pub fn assetToIXMLElement(self: BrowseReponse, document: *c.struct__IXML_Document, asset: ImmichStore.Asset, parentId: []const u8) ![*c]c.struct__IXML_Element {
         const assetElement = c.ixmlDocument_createElement(document, "item");
-        try create_attribute(allocator, assetElement, "id", asset.id);
-        try create_attribute(allocator, assetElement, "parentID", parentId);
-        try create_attribute(allocator, assetElement, "restricted", "1");
+        try self.create_attribute(assetElement, "id", asset.id);
+        try self.create_attribute(assetElement, "parentID", parentId);
+        try self.create_attribute(assetElement, "restricted", "1");
 
-        const titleElement = try create_text_element(allocator, document, "dc:title", asset.id);
+        const titleElement = try self.create_text_element(document, "dc:title", asset.id);
         _ = c.ixmlNode_appendChild(@ptrCast(assetElement), @ptrCast(titleElement));
 
-        const classElement = try create_text_element(
-            allocator,
+        const classElement = try self.create_text_element(
             document,
             "upnp:class",
             "object.item.imageItem.photo",
         );
         _ = c.ixmlNode_appendChild(@ptrCast(assetElement), @ptrCast(classElement));
 
-        const resElement = try create_text_element_fmt(
-            allocator,
+        const resElement = try self.create_text_element_fmt(
             document,
             "res",
-            "http://192.168.0.11:8888/assets/{s}{s}",
-            .{ asset.id, if (asset.mimeType) |mimeType| mimeType.toExtension() else "" },
+            "{s}/assets/{s}{s}",
+            .{ self.origin, asset.id, if (asset.mimeType) |mimeType| mimeType.toExtension() else "" },
         );
-        try create_attribute_fmt(
-            allocator,
+        try self.create_attribute_fmt(
             resElement,
             "protocolInfo",
             "http-get:*:{s}:*",
             .{if (asset.mimeType) |mimeType| mimeType.toString() else ""},
         );
-        try create_attribute_fmt(
-            allocator,
+        try self.create_attribute_fmt(
             resElement,
             "resolution",
             "{d}x{d}",
             .{ asset.width, asset.height },
         );
-        try create_attribute_fmt(allocator, resElement, "size", "{d}", .{asset.size});
+        try self.create_attribute_fmt(resElement, "size", "{d}", .{asset.size});
 
         _ = c.ixmlNode_appendChild(@ptrCast(assetElement), @ptrCast(resElement));
 
         return assetElement;
     }
 
-    pub fn create_text_element(allocator: std.mem.Allocator, document: *c.struct__IXML_Document, name: [*c]const u8, text: []const u8) ![*c]c.struct__IXML_Element {
-        const textCstr = try allocator.dupeZ(u8, text);
-        defer allocator.free(textCstr);
+    pub fn create_text_element(self: BrowseReponse, document: *c.struct__IXML_Document, name: [*c]const u8, text: []const u8) ![*c]c.struct__IXML_Element {
+        const textCstr = try self.allocator.dupeZ(u8, text);
+        defer self.allocator.free(textCstr);
 
         const element = c.ixmlDocument_createElement(document, name);
         const textNode = c.ixmlDocument_createTextNode(document, textCstr);
@@ -343,9 +337,9 @@ const BrowseReponse = struct {
         return element;
     }
 
-    pub fn create_text_element_fmt(allocator: std.mem.Allocator, document: *c.struct__IXML_Document, name: [*c]const u8, comptime fmt: []const u8, args: anytype) ![*c]c.struct__IXML_Element {
-        const textCstr = try std.fmt.allocPrintSentinel(allocator, fmt, args, 0);
-        defer allocator.free(textCstr);
+    pub fn create_text_element_fmt(self: BrowseReponse, document: *c.struct__IXML_Document, name: [*c]const u8, comptime fmt: []const u8, args: anytype) ![*c]c.struct__IXML_Element {
+        const textCstr = try std.fmt.allocPrintSentinel(self.allocator, fmt, args, 0);
+        defer self.allocator.free(textCstr);
 
         const element = c.ixmlDocument_createElement(document, name);
         const textNode = c.ixmlDocument_createTextNode(document, textCstr);
@@ -354,16 +348,16 @@ const BrowseReponse = struct {
         return element;
     }
 
-    pub fn create_attribute(allocator: std.mem.Allocator, element: *c.struct__IXML_Element, name: [*c]const u8, value: []const u8) !void {
-        const valueCstr = try allocator.dupeZ(u8, value);
-        defer allocator.free(valueCstr);
+    pub fn create_attribute(self: BrowseReponse, element: *c.struct__IXML_Element, name: [*c]const u8, value: []const u8) !void {
+        const valueCstr = try self.allocator.dupeZ(u8, value);
+        defer self.allocator.free(valueCstr);
 
         _ = c.ixmlElement_setAttribute(element, name, valueCstr);
     }
 
-    pub fn create_attribute_fmt(allocator: std.mem.Allocator, element: *c.struct__IXML_Element, name: [*c]const u8, comptime fmt: []const u8, args: anytype) !void {
-        const valueCstr = try std.fmt.allocPrintSentinel(allocator, fmt, args, 0);
-        defer allocator.free(valueCstr);
+    pub fn create_attribute_fmt(self: BrowseReponse, element: *c.struct__IXML_Element, name: [*c]const u8, comptime fmt: []const u8, args: anytype) !void {
+        const valueCstr = try std.fmt.allocPrintSentinel(self.allocator, fmt, args, 0);
+        defer self.allocator.free(valueCstr);
 
         _ = c.ixmlElement_setAttribute(element, name, valueCstr);
     }

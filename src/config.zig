@@ -8,6 +8,7 @@ const log = std.log.scoped(.Config);
 cache_timeout: u32,
 immich_api_key: []const u8,
 immich_url: []const u8,
+dlna_origin: []const u8,
 port: u16,
 allocator: std.mem.Allocator,
 
@@ -60,11 +61,13 @@ fn readConfigFile(self: *Self) !void {
             self.immich_api_key = try self.allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "IMMICH_URL")) {
             self.immich_url = try self.allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "IMMICH_URL")) {
+        } else if (std.mem.eql(u8, key, "PORT")) {
             self.port = std.fmt.parseInt(u16, value, 10) catch blk: {
                 log.warn("Invalid port, falling back to {d}", .{self.port});
                 break :blk self.port;
             };
+        } else if (std.mem.eql(u8, key, "DLNA_ORIGIN")) {
+            self.dlna_origin = try self.allocator.dupe(u8, value);
         } else {
             log.debug("Ignoring unrecognized setting {s}", .{key});
         }
@@ -90,6 +93,32 @@ fn readEnvVars(self: *Self) !void {
             break :blk self.port;
         };
     }
+    if (env.get("DLNA_ORIGIN")) |origin| {
+        log.debug("Reading DLNA_ORIGIN", .{});
+        self.dlna_origin = try self.allocator.dupe(u8, origin);
+    }
+}
+
+pub fn validate(self: *Self) !void {
+    var invalid_config = false;
+    if (self.immich_api_key.len == 0) {
+        log.err("IMMICH_API_KEY required", .{});
+        invalid_config = true;
+    }
+    if (self.immich_url.len == 0) {
+        log.err("IMMICH_URL required", .{});
+        invalid_config = true;
+    }
+
+    if (self.dlna_origin.len == 0) {
+        const origin = try std.fmt.allocPrint(self.allocator, "http://localhost:{d}", .{self.port});
+        log.warn("Missing DLNA origin, falling back to {s}", .{origin});
+        self.dlna_origin = origin;
+    }
+
+    if (invalid_config) {
+        return error.InvalidConfig;
+    }
 }
 
 pub fn load(allocator: std.mem.Allocator) !Self {
@@ -99,15 +128,13 @@ pub fn load(allocator: std.mem.Allocator) !Self {
         .immich_api_key = &[_]u8{},
         .immich_url = try allocator.dupe(u8, "http://localhost:2283"),
         .port = 8200,
+        .dlna_origin = "",
     };
 
     try settings.readConfigFile();
     try settings.readEnvVars();
 
-    if (settings.immich_api_key.len == 0 or settings.immich_url.len == 0) {
-        log.err("IMMICH_API_KEY and IMMICH_URL settings required", .{});
-        return error.InvalidConfig;
-    }
+    try settings.validate();
 
     return settings;
 }

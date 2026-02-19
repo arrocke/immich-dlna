@@ -86,6 +86,11 @@
               default = false;
               description = "Open the TCP port for the server as well as UDP port 1200 for upnp.";
             };
+            dlnaOrigin = mkOption {
+              type = types.str;
+              default = "http://localhost:${port.default}";
+              description = "The origin to use when generating URLs to assets on the DLNA server.";
+            };
           };
         };
 
@@ -123,6 +128,7 @@
               Environment = [
                 "IMMICH_URL=${cfg.immichUrl}"
                 "PORT=${toString cfg.port}"
+                "DLNA_ORIGIN=${cfg.dlnaOrigin}"
               ];
             };
           };

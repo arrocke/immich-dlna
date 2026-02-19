@@ -5,3 +5,5 @@ const Self = @This();
 
 allocator: std.mem.Allocator,
 immichStore: ImmichStore,
+port: u16,
+dlna_origin: []const u8,
