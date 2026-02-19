@@ -59,7 +59,7 @@
       let
         cfg = config.services.immich-dlna;
       in {
-        options = with lib; {
+        options = with lib; rec {
           services.immich-dlna = {
             enable = mkEnableOption "Enable the DLNA server for Immich";
             port = mkOption {
