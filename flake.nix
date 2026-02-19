@@ -35,6 +35,8 @@
         buildInputs = [ pkgs.libupnp ];
 
         buildPhase = ''
+          export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
+          mkdir -p $ZIG_GLOBAL_CACHE_DIR
           zig build install -Drelease-safe -Dprod --prefix $out
         '';
 
