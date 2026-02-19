@@ -7,9 +7,14 @@
     zig.inputs.nixpkgs.follows = "nixpkgs";
     zls.url = "github:zigtools/zls/0.15.1";
     zls.inputs.nixpkgs.follows = "nixpkgs";
+
+    zon2nix = {
+      url = "github:nix-community/zon2nix?rev=f0ee7bd6491d5c7c6d15e0b7944824d253bcd311";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, zig, zls, ... }: 
+  outputs = { self, nixpkgs, zig, zls, zon2nix, ... }: 
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
@@ -22,6 +27,7 @@
           pkgs.libupnp
           pkgs.pkg-config
           pkgs.opencode
+          zon2nix.packages.${system}.default
         ];
       };
 
@@ -33,6 +39,10 @@
 
         nativeBuildInputs = [ zigPkg pkgs.pkg-config ];
         buildInputs = [ pkgs.libupnp ];
+
+        postPatch = ''
+          ln -s ${pkgs.callPackage ./deps.nix { }} $ZIG_GLOBAL_CACHE_DIR/p
+        '';
 
         buildPhase = ''
           export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
