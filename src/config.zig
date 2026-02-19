@@ -61,6 +61,18 @@ pub fn load(allocator: std.mem.Allocator) !Self {
         }
     }
 
+    var env = try std.process.getEnvMap(allocator);
+    defer env.deinit();
+
+    if (env.get("IMMICH_API_KEY")) |immich_api_key| {
+        log.debug("Reading IMMICH_API_KEY", .{});
+        settings.immich_api_key = try allocator.dupe(u8, immich_api_key);
+    }
+    if (env.get("IMMICH_URL")) |immich_url| {
+        log.debug("Reading IMMICH_URL", .{});
+        settings.immich_url = try allocator.dupe(u8, immich_url);
+    }
+
     if (settings.immich_api_key.len == 0 or settings.immich_url.len == 0) {
         log.err("IMMICH_API_KEY and IMMICH_URL settings required", .{});
         return error.InvalidConfig;

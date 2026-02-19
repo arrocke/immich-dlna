@@ -54,9 +54,9 @@
         options = with lib; {
           services.immich-dlna = {
             enable = mkEnableOption "Enable the DLNA server for Immich";
-            immichApiKey = mkOption {
-              type = types.str;
-              description = "The API key to access your Immich API";
+            immichApiKeyFile = mkOption {
+              type = types.path;
+              description = "The path to a file that contains the API key for your Immich API";
             };
             immichUrl = mkOption {
               type = types.str;
@@ -68,26 +68,10 @@
               default = "/var/lib/immich";
               description = "The file path where your Immich server stores files";
             };
-            cacheTimeout = mkOption {
-              type = types.int;
-              default = 1800; # 30 minutes
-              description = "The number of seconds that Immich API data will be cached before it is refreshed.";
-            };
           };
         };
 
         config = lib.mkIf (cfg.enable && config.services.immich.enable) {
-          environment.etc."immich-dlna/immich-dlna.conf" = {
-            text = ''
-              IMMICH_API_KEY = ${cfg.immichApiKey}
-              IMMICH_URL = ${cfg.immichUrl}
-              CACHE_TIMEOUT = ${toString cfg.cacheTimeout}
-            '';
-            user = "immich";
-            group = "immich";
-            mode = "0640";
-          };
-
           systemd.services.immich-dlna = {
             description = "Immich DLNA Server";
             wantedBy = [ "multi-user.target" ];
@@ -109,6 +93,13 @@
 
               Restart = "on-failure";
               RestartSec = 5;
+
+              EnvironmentFile = [
+                cfg.immichApiKeyFile 
+              ];
+              Environment = [
+                "IMMICH_URL=${cfg.immichUrl}"
+              ];
             };
           };
         };
