@@ -122,7 +122,7 @@
               ];
               Environment = [
                 "IMMICH_URL=${cfg.immichUrl}"
-                "PORT=${cfg.port}"
+                "PORT=${toString cfg.port}"
               ];
             };
           };
