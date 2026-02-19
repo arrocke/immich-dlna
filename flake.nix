@@ -29,7 +29,7 @@
         pname = "immich-dlna";
         version = "0.1.0";
 
-        src = ./src;
+        src = ./.;
 
         nativeBuildInputs = [ zigPkg pkgs.pkg-config ];
         buildInputs = [ pkgs.libupnp ];
